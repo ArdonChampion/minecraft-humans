@@ -26,6 +26,8 @@ public final class Goal {
     public List<Step> steps = new ArrayList<>();
     public int stepIdx, rounds;
     public boolean done, plannerSaysDone;
+    /** Steps came straight from the chat mind: done when they all succeed; on a failure the planner takes over. */
+    public boolean quick;
     public String lastThought = "";
 
     public Goal(String text, String from, UUID fromId, String group, long created) {

@@ -48,7 +48,7 @@ public final class PlanTask extends Task {
             HumanLog.log("plan_step", h, "goal", g.title, "round", g.rounds, "step", st.describe(), "status", s.name(), "outcome", cur.outcome(), "secs", cur.age() / 20);
             cur = null;
             g.stepIdx++;
-            if (s == Status.FAIL) { g.stepIdx = g.steps.size(); nextPlanTick = m.now() + 60; }
+            if (s == Status.FAIL) { g.stepIdx = g.steps.size(); nextPlanTick = m.now() + 60; g.quick = false; }
             return Status.RUNNING;
         }
         if (g.stepIdx < g.steps.size()) {
@@ -57,12 +57,12 @@ public final class PlanTask extends Task {
             try { r = Skills.start(h, m, g, st); } catch (Exception e) { r = new Skills.Start(null, null, "error: " + e.getMessage()); }
             if (r.task() != null) { cur = r.task(); return Status.RUNNING; }
             if (r.error() != null) { HumanLog.log("plan_step", h, "goal", g.title, "round", g.rounds, "step", st.describe(), "status", "REJECTED", "outcome", r.error());
-                g.note("FAILED " + st.describe() + " -> " + r.error()); g.stepIdx = g.steps.size(); nextPlanTick = m.now() + 60; return Status.RUNNING; }
+                g.note("FAILED " + st.describe() + " -> " + r.error()); g.stepIdx = g.steps.size(); nextPlanTick = m.now() + 20; g.quick = false; return Status.RUNNING; }
             g.note("OK " + st.describe() + (r.done() == null ? "" : " -> " + r.done()));
             g.stepIdx++;
             return Status.RUNNING;
         }
-        if (g.plannerSaysDone) { g.done = true; return Status.RUNNING; }
+        if (g.plannerSaysDone || g.quick) { g.done = true; return Status.RUNNING; }
         if (m.now() < nextPlanTick) return Status.RUNNING; // don't re-think every second after quick failures
         requestPlan(h, m);
         return Status.RUNNING;
@@ -110,7 +110,7 @@ public final class PlanTask extends Task {
                 for (Goal.Step s : res.steps()) sb.append(" | ").append(s.describe());
                 plugin.getLogger().info("[debug] " + h.name + " plan r" + g.rounds + " (" + g.title + "): " + res.thought() + sb + (res.done() ? " | DONE" : ""));
             }
-            if (!res.say().isBlank() && h.valid() && m.nearestPlayer(h, 32) != null) plugin.chat().broadcast(h, res.say().length() > 160 ? res.say().substring(0, 157) + "..." : res.say());
+            if (!res.say().isBlank() && h.valid() && m.nearestPlayer(h, 32) != null) plugin.chat().saySpontaneous(h, res.say().length() > 160 ? res.say().substring(0, 157) + "..." : res.say());
         }));
     }
 

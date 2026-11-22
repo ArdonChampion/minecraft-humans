@@ -346,6 +346,8 @@ public final class Brain {
             Player p = Bukkit.getPlayer(h.pendingRequester);
             if (p != null) s.append("PLAYER REQUEST: ").append(p.getName()).append(" asked ").append(h.name).append(" to ").append(h.pendingRequest.replace("request_", "").replace('_', ' ')).append(".\n");
         }
+        String convo = h.conversation(m.now(), 6, 20L * 60 * 3);
+        if (!convo.isEmpty()) s.append("Conversation around ").append(h.name).append(" (oldest first):\n").append(convo).append("\n");
         if (!h.recent.isEmpty()) s.append("Recent events (newest first): ").append(String.join(" | ", h.recent)).append(".\n");
         if (!h.memories.isEmpty()) s.append("Memories: ").append(String.join(" | ", h.memories.stream().limit(8).toList())).append(".\n");
         s.append("\n");

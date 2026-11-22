@@ -35,7 +35,7 @@ public final class Human {
     public boolean thinking;
     public long lastThinkTick;
     public long taskStartTick;
-    public long lastTalkMs;
+    public long lastTalkMs, lastSpontaneousMs;
     public boolean chatInFlight;
     public String pendingRequest;          // what a player asked for
     public UUID pendingRequester;
@@ -125,6 +125,33 @@ public final class Human {
     }
     public static String trustWord(double t) {
         return t < 0.6 ? "hates" : t < 1.4 ? "distrusts" : t < 2.4 ? "neutral towards" : t < 3.3 ? "likes" : "best friends with";
+    }
+
+    // ---------------------------------------------------------------- hearing / conversation
+
+    /** Something said within earshot (by a player or a human, including this one). */
+    public record Heard(long tick, String who, String text) {}
+    /** A chat message waiting for this human's mind to answer. */
+    public record Msg(UUID player, String name, String text, boolean named, long tick) {}
+    public final Deque<Heard> heard = new ArrayDeque<>();
+    public final List<Msg> inbox = new ArrayList<>();
+    public boolean mindBusy, mindScheduled;
+
+    public void hear(String who, String text, long now) {
+        heard.addLast(new Heard(now, who, text.length() > 200 ? text.substring(0, 197) + "..." : text));
+        while (heard.size() > 18) heard.removeFirst();
+    }
+
+    /** The conversation around this human, oldest first, with how long ago each line was said. */
+    public String conversation(long now, int max, long maxAgeTicks) {
+        List<String> out = new ArrayList<>();
+        for (Heard x : heard) {
+            if (now - x.tick() > maxAgeTicks) continue;
+            long s = (now - x.tick()) / 20;
+            out.add("[" + (s < 60 ? s + "s" : s / 60 + "m") + " ago] " + (x.who().equals(name) ? name + " (you)" : x.who()) + ": " + x.text());
+        }
+        if (out.size() > max) out = out.subList(out.size() - max, out.size());
+        return String.join("\n", out);
     }
 
     public void event(String s) {

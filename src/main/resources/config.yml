@@ -36,6 +36,19 @@ zones:
   # Humans won't break/build/pick up within this many blocks of players' chests, beds, furnaces, signs...
   auto_radius: 9
 
+chat:
+  # Who answers chat: deepseek = one AI "mind" call that sees the conversation + surroundings and both talks and acts
+  # (falls back to the older Gemini intent pipeline when DeepSeek is busy). gemini = always the older pipeline.
+  engine: deepseek
+  # Wait this long (ticks) after a message so quick bursts are answered together
+  gather_ticks: 30
+  mind_max_tokens: 3500
+  # after this many seconds without a DeepSeek answer the same question goes to Gemini instead
+  mind_timeout_seconds: 15
+  mind_fallback_tokens: 1500
+  # unprompted lines (not answers) at most this often per human; near-repeats are always skipped
+  spontaneous_cooldown_seconds: 45
+
 budget:
   # Gemini Decision 1 free tier: 200 RPM, 50k TPM, 10k RPD. We stay well under.
   decisions_per_day: 9000

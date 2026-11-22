@@ -75,6 +75,18 @@ public final class Planner {
     }
 
     static String snapshot(Human h, HumanManager m, Goal g) {
+        StringBuilder s = new StringBuilder(world(h, m));
+        s.append("\nGOAL: ").append(g.text);
+        if (g.from != null) s.append(" (asked by player ").append(g.from).append(")");
+        if (!g.group.isEmpty()) s.append(" [you were asked together with: ").append(g.group).append(" - coordinate, split the work, don't all do the same thing]");
+        s.append("\n");
+        if (!g.log.isEmpty()) s.append("PROGRESS SO FAR (oldest first):\n- ").append(String.join("\n- ", g.log)).append("\n");
+        s.append("Round ").append(g.rounds + 1).append(". What next?");
+        return s.toString();
+    }
+
+    /** Everything the human knows about itself and its surroundings right now (shared by the planner and the chat mind). */
+    public static String world(Human h, HumanManager m) {
         Location l = h.loc(); World w = l.getWorld();
         StringBuilder s = new StringBuilder();
         long t = w.getTime();
@@ -111,14 +123,15 @@ public final class Planner {
         s.append("PLAYERS' BASES (protected, don't break/build there): ").append(HumansPlugin.get().zones().describeNear(l, h)).append(".\n");
         if (!h.memories.isEmpty()) s.append("MEMORIES: ").append(String.join(" | ", h.memories.stream().limit(8).toList())).append(".\n");
         if (!h.recent.isEmpty()) s.append("RECENT EVENTS (newest first): ").append(String.join(" | ", h.recent)).append(".\n");
-        s.append("\nGOAL: ").append(g.text);
-        if (g.from != null) s.append(" (asked by player ").append(g.from).append(")");
-        if (!g.group.isEmpty()) s.append(" [you were asked together with: ").append(g.group).append(" - coordinate, split the work, don't all do the same thing]");
-        s.append("\n");
-        if (!g.log.isEmpty()) s.append("PROGRESS SO FAR (oldest first):\n- ").append(String.join("\n- ", g.log)).append("\n");
-        s.append("Round ").append(g.rounds + 1).append(". What next?");
+        s.append(dev.timur.humans.Perception.describe(h, m));
+        String convo = h.conversation(m.now(), 14, 20L * 60 * 6);
+        if (!convo.isEmpty()) s.append("CONVERSATION AROUND YOU (oldest first):\n").append(convo).append("\n");
+        s.append("CURRENTLY DOING: ").append(h.task == null ? "nothing" : h.task.label())
+            .append(h.goal != null && !h.goal.done ? " (working on goal: " + h.goal.title + (h.goal.from != null ? ", asked by " + h.goal.from : "") + ")" : "").append(".\n");
         return s.toString();
     }
+
+    public static String skillsText() { return SKILLS + "Craftable recipes: " + recipes() + ".\n"; }
 
     private static String names(Human h) {
         List<String> n = new ArrayList<>();
@@ -146,7 +159,7 @@ public final class Planner {
             .thenApply(Planner::parse);
     }
 
-    static Result parse(String raw) {
+    public static Result parse(String raw) {
         String s = raw.replaceAll("(?s)<think>.*?</think>", "").trim();
         int a = s.indexOf('{'), b = s.lastIndexOf('}');
         if (a < 0 || b <= a) throw new RuntimeException("planner gave no JSON: " + (s.length() > 120 ? s.substring(0, 120) : s));

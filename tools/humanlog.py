@@ -70,6 +70,13 @@ def line(e):
         return f"{t} {h:8} <- {e.get('player')}: \"{short(e.get('text'), 80)}\" [{e.get('intent')}/{e.get('reply_kind')}] trust {e.get('trust_now', 0):.2f}"
     if ty == "chat_ignored":
         return f"{t} {h:8} (ignored, not addressed) {e.get('player')}: {short(e.get('text'), 70)}"
+    if ty == "mind":
+        act = ("KEEP CURRENT" if e.get("keep_current") else "") or " | ".join(e.get("steps", [])) or (("GOAL " + e.get("goal")) if e.get("goal") else "") or ("STOP" if e.get("stop") else "no action")
+        if e.get("ignore"):
+            return f"{t} {h:8} MIND ignored {e.get('heard')} ({e.get('ms')}ms)"
+        return f"{t} {h:8} MIND heard {e.get('heard')} -> says \"{short(e.get('say'), 80)}\" | does: {short(act, 120)} ({e.get('ms')}ms)"
+    if ty == "chat_heard":
+        return f"{t} {h:8} <- {e.get('player')}: \"{short(e.get('text'), 80)}\"{' (named)' if e.get('named') else ''}{' [queued while busy]' if e.get('busy') else ''}"
     if ty == "say":
         return f"{t} {h:8} says: \"{short(e.get('line'), 100)}\""
     if ty == "request":
@@ -172,7 +179,7 @@ def main():
         sel = [e for e in ev if (e.get("h") or "").lower() == (a.name or "").lower() and e["type"] != "ai_call"]
         for e in sel[-(a.n or 120):]: print(line(e))
     elif a.cmd == "chat":
-        sel = [e for e in ev if e["type"] in ("chat_in", "chat_ignored", "say", "request", "goal_new")]
+        sel = [e for e in ev if e["type"] in ("chat_heard", "mind", "chat_in", "chat_ignored", "say", "request", "goal_new")]
         for e in sel[-(a.n or 80):]: print(line(e))
     elif a.cmd == "plans":
         sel = [e for e in ev if e["type"] in ("goal_new", "plan", "plan_step", "goal_end") and (not a.name or (e.get("h") or "").lower() == a.name.lower())]

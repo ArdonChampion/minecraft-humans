@@ -17,10 +17,10 @@ import org.bukkit.event.Listener;
 import java.util.*;
 
 /**
- * Players talk to humans in normal chat.
- * Gemini Decision understands the message (intent / trust / mood / what kind of reply).
- * Simple replies ("ok", "thanks", "hi") are ready-made lines; only real conversation goes to Flash-Lite.
- * Requests are carried out directly - humans are cooperative unless they really dislike you.
+ * Players talk to humans in normal chat. Every human within earshot hears it; the addressed one (by name, or the one you were
+ * just talking to) answers with ONE AI call that sees its whole situation, the conversation and what players point at,
+ * and returns both what to say and what to do (planner skills / a goal). Messages are queued, never dropped.
+ * Fallback when DeepSeek is down: the older Gemini-Decision intent pipeline with ready-made lines.
  */
 public final class ChatBrain implements Listener {
     private final HumansPlugin plugin;
@@ -79,12 +79,22 @@ public final class ChatBrain implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> handle(p, text));
     }
 
+    // ---------------------------------------------------------------- hearing + routing
+
+    /** Which human each player is currently talking to (so "drop me the pickaxe" + "juno" reach the same human). */
+    private final Map<UUID, UUID> partner = new HashMap<>();
+    private final Map<UUID, Long> partnerTick = new HashMap<>();
+
     private void handle(Player p, String text) {
         if (!p.isOnline()) return;
         HumanManager m = plugin.manager();
+        long now = m.now();
         String lower = text.toLowerCase(Locale.ROOT);
+        // everyone within earshot hears it, addressed or not
+        for (Human h : m.all())
+            if (h.valid() && h.loc().getWorld() == p.getWorld() && h.loc().distance(p.getLocation()) < 32) h.hear(p.getName(), text, now);
         List<Human> targets = new ArrayList<>();
-        boolean everyone = lower.matches(".*\\b(everyone|everybody|guys|all of you|y'all)\\b.*");
+        boolean everyone = lower.matches(".*\\b(everyone|everybody|guys|all of you|y'all|you all)\\b.*");
         for (Human h : m.all()) {
             if (!h.valid() || h.loc().getWorld() != p.getWorld()) continue;
             double d = h.loc().distance(p.getLocation());
@@ -93,16 +103,172 @@ public final class ChatBrain implements Listener {
         }
         boolean named = !targets.isEmpty();
         if (!named) {
-            Human best = null; double bd = 12;
-            for (Human h : m.all()) {
-                if (!h.valid() || h.loc().getWorld() != p.getWorld()) continue;
-                double d = h.loc().distance(p.getLocation());
-                if (d < bd) { bd = d; best = h; }
+            // keep talking to the human you were just talking to; otherwise the nearest one
+            Human pt = null;
+            UUID pid = partner.get(p.getUniqueId());
+            if (pid != null && now - partnerTick.getOrDefault(p.getUniqueId(), 0L) < 20 * 120) {
+                for (Human h : m.all()) if (h.id.equals(pid) && h.valid() && h.loc().getWorld() == p.getWorld() && h.loc().distance(p.getLocation()) < 48) pt = h;
             }
-            if (best != null) targets.add(best);
+            if (pt == null) {
+                double bd = 16;
+                for (Human h : m.all()) {
+                    if (!h.valid() || h.loc().getWorld() != p.getWorld()) continue;
+                    double d = h.loc().distance(p.getLocation());
+                    if (d < bd) { bd = d; pt = h; }
+                }
+            }
+            if (pt != null) targets.add(pt);
         }
-        for (Human h : targets.subList(0, Math.min(named || everyone ? 6 : 1, targets.size()))) respond(h, p, text, named);
+        if (targets.size() == 1) { partner.put(p.getUniqueId(), targets.getFirst().id); partnerTick.put(p.getUniqueId(), now); }
+        for (Human h : targets.subList(0, Math.min(6, targets.size()))) enqueue(h, p, text, named);
     }
+
+    private void enqueue(Human h, Player p, String text, boolean named) {
+        HumanManager m = plugin.manager();
+        if (h.sleeping && !named) { HumanLog.log("chat_ignored", h, "player", p.getName(), "text", text, "why", "asleep"); return; }
+        h.event(p.getName() + " said: \"" + trim(text, 120) + "\"");
+        h.inbox.add(new Human.Msg(p.getUniqueId(), p.getName(), text, named, m.now()));
+        while (h.inbox.size() > 6) h.inbox.removeFirst();
+        HumanLog.log("chat_heard", h, "player", p.getName(), "text", text, "named", named, "queued", h.inbox.size(), "busy", h.mindBusy);
+        scheduleMind(h, plugin.getConfig().getInt("chat.gather_ticks", 30));
+    }
+
+    /** Wait a moment so quick bursts ("man can you drop me the pickaxe" / "juno") are answered together. */
+    private void scheduleMind(Human h, int delay) {
+        if (h.mindBusy || h.mindScheduled) return;
+        h.mindScheduled = true;
+        later(delay, () -> { h.mindScheduled = false; think(h); });
+    }
+
+    // ---------------------------------------------------------------- the mind: one AI call that hears, sees, talks AND acts
+
+    private void think(Human h) {
+        if (h.inbox.isEmpty() || h.mindBusy) return;
+        if (!h.valid()) { h.inbox.clear(); return; }
+        List<Human.Msg> msgs = new ArrayList<>(h.inbox);
+        h.inbox.clear();
+        Human.Msg last = msgs.getLast();
+        Player p = Bukkit.getPlayer(last.player());
+        if (p == null || !p.isOnline()) return;
+        boolean anyNamed = msgs.stream().anyMatch(Human.Msg::named);
+        // DeepSeek when it is up, otherwise the SAME prompt on Gemini Flash-Lite (TextClient falls back) - one behaviour either way
+        boolean useMind = "deepseek".equalsIgnoreCase(plugin.getConfig().getString("chat.engine", "deepseek")) && plugin.text().ready();
+        if (!useMind) { legacyRespond(h, p, last.text(), anyNamed); return; }
+        HumanManager m = plugin.manager();
+        h.mindBusy = true;
+        StringBuilder user = new StringBuilder(dev.timur.humans.plan.Planner.world(h, m));
+        user.append("\nNEW MESSAGE").append(msgs.size() > 1 ? "S" : "").append(" FOR YOU TO ANSWER (use the conversation above for context):\n");
+        for (Human.Msg x : msgs)
+            user.append("- ").append(x.name()).append(x.named() ? " (said your name)" : " (didn't say your name - maybe talking to you, maybe to someone else)").append(": ").append(x.text()).append("\n");
+        user.append("You ").append(Human.trustWord(h.trustOf(p.getUniqueId()))).append(" ").append(p.getName()).append(". Reply with the JSON only.");
+        long t0 = System.currentTimeMillis();
+        int maxTokens = plugin.getConfig().getInt("chat.mind_max_tokens", 3500), timeout = plugin.getConfig().getInt("chat.mind_timeout_seconds", 15);
+        plugin.text().complete(mindSystem(h), user.toString(), maxTokens, timeout, plugin.getConfig().getInt("chat.mind_fallback_tokens", 1500)).whenComplete((res, err) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            h.mindBusy = false;
+            long ms = System.currentTimeMillis() - t0;
+            JsonObject j = null; String problem = null;
+            if (err != null) problem = String.valueOf(err.getMessage());
+            else try { j = Brain.parseJson(res); } catch (Exception ex) { problem = "unparseable: " + ex.getMessage(); }
+            if (j == null) {
+                HumanLog.log("ai_error", h, "api", "mind", "ms", ms, "error", problem, "reply", res);
+                if (h.valid() && p.isOnline()) legacyRespond(h, p, last.text(), anyNamed);
+            } else {
+                try { applyMind(h, p, msgs, j, res, ms); }
+                catch (Exception ex) { HumanLog.error("mind", h, ex); }
+            }
+            if (!h.inbox.isEmpty()) scheduleMind(h, 10);
+        }));
+    }
+
+    private String mindSystem(Human h) {
+        return "You are the mind of " + h.name + ", a person living in a Minecraft 26.3 survival world on a small server with friends. "
+            + "You are NOT an AI assistant and never say you are. Personality: " + h.personality.describe() + ".\n"
+            + "Players talk to you in chat. You get your full situation (STATE), what you can see, the conversation around you and the new message(s). "
+            + "Decide what you SAY and what you DO in one go - what you say must match what you actually do (never say you'll do something without putting it in steps/goal, "
+            + "never claim you did something you didn't).\n"
+            + "How to think:\n"
+            + "- Read the whole conversation. Follow-ups like 'not that one', 'like I said', 'do it', 'here', or just your name refer to earlier messages - answer the real request.\n"
+            + "- 'this', 'that', 'here', 'there', 'it' usually mean what the player is looking at, holding or standing on, or what they dropped (see PLAYERS AROUND YOU / ITEMS).\n"
+            + "- Be helpful and fun: players are your friends. Do what they ask unless you truly hate them, it would hurt someone, or it's impossible. Doing beats talking.\n"
+            + "- Use exact items, coordinates, names and counts from STATE in your skill arguments. Give exactly what was asked for.\n"
+            + "- Be honest: only mention items, places and progress that really exist in STATE. If you can't do something, say why in plain words and offer the closest thing you can do.\n"
+            + "- Small jobs you can do right now -> 'steps' (1-5 skills). Jobs that need gathering, crafting chains or building over time -> 'goal' (describe what's wanted; a planner works it out). "
+            + "A request to stop/wait/stay -> 'stop': true. Just chatting -> no steps, no goal (you keep doing what you were doing).\n"
+            + "- If what you are CURRENTLY DOING already is what they want (they ask where you're going, repeat the order, or hurry you), set 'keep_current': true, "
+            + "leave steps/goal empty and just answer - starting over would throw away your progress.\n"
+            + "- If a message clearly is NOT meant for you (talking to another player or human), set 'ignore': true and leave everything else empty.\n"
+            + "- Speak like a real player in chat: short (max 25 words), casual, in the SAME LANGUAGE the player wrote in, in character. No emojis, asterisks, quotes or narration.\n"
+            + "Reply with ONLY this JSON object:\n"
+            + "{\"ignore\":false,\"say\":\"what you say out loud (can be empty)\",\"mood\":\"neutral|happy|sad|angry|scared|surprised\",\"trust\":0,"
+            + "\"remember\":\"a short fact worth remembering long-term, or empty\",\"stop\":false,\"keep_current\":false,\"title\":\"2-5 words naming what you'll do\","
+            + "\"steps\":[{\"do\":\"skill_name\", ...args}],\"goal\":\"\"}\n"
+            + "trust = how this makes you feel about the player, from -2 (much worse) to 2 (much better).\n"
+            + "SKILLS (for steps):\n" + dev.timur.humans.plan.Planner.skillsText();
+    }
+
+    private void applyMind(Human h, Player p, List<Human.Msg> msgs, JsonObject j, String raw, long ms) {
+        HumanManager m = plugin.manager();
+        boolean anyNamed = msgs.stream().anyMatch(Human.Msg::named);
+        boolean ignore = bool(j, "ignore") && !anyNamed;
+        String say = TextClient.clean(str(j, "say")), goal = str(j, "goal").trim(), title = str(j, "title").trim(), mood = str(j, "mood"), rem = str(j, "remember").trim();
+        boolean stop = bool(j, "stop"), keep = bool(j, "keep_current");
+        List<dev.timur.humans.plan.Goal.Step> steps = new ArrayList<>();
+        try { steps = dev.timur.humans.plan.Planner.parse(raw).steps(); } catch (Exception ignored) {}
+        double trust = 0;
+        try { if (j.has("trust") && j.get("trust").isJsonPrimitive()) trust = Math.max(-2, Math.min(2, j.get("trust").getAsDouble())); } catch (Exception ignored) {}
+        if (HumanLog.on()) {
+            JsonObject ev = HumanLog.ev("mind", h);
+            HumanLog.put(ev, "player", p.getName());
+            JsonArray in = new JsonArray(); for (Human.Msg x : msgs) in.add(x.name() + ": " + x.text()); ev.add("heard", in);
+            HumanLog.put(ev, "ignore", ignore); HumanLog.put(ev, "say", say); HumanLog.put(ev, "mood", mood); HumanLog.put(ev, "trust", trust);
+            HumanLog.put(ev, "stop", stop); HumanLog.put(ev, "keep_current", keep); HumanLog.put(ev, "goal", goal); HumanLog.put(ev, "title", title); HumanLog.put(ev, "remember", rem);
+            JsonArray st = new JsonArray(); for (var s : steps) st.add(s.describe()); ev.add("steps", st);
+            HumanLog.put(ev, "ms", ms);
+            HumanLog.log(ev);
+        }
+        if (ignore) return;
+        h.addTrust(p, trust * 0.2);
+        Expression face = Expression.parse(mood, Expression.NEUTRAL);
+        if (face != Expression.NEUTRAL) h.express(face, 80, plugin, m.now());
+        if (!rem.isEmpty() && !rem.equalsIgnoreCase("none")) h.remember(trim(rem, 120));
+        if (say != null && !say.isBlank()) say(h, say);
+        String lastText = msgs.getLast().text();
+        if (stop) {
+            if (h.goal != null) h.event("stopped working on: " + h.goal.title);
+            h.goal = null;
+            m.startTask(h, new Option("do_request", "stop and wait, like " + p.getName() + " asked", () -> new dev.timur.humans.tasks.Tasks.Idle(20 * 20, "waiting"), 1));
+            h.commitUntil = m.now() + 20 * 60; h.commitWho = p.getName();
+        }
+        // already doing exactly this? keep going instead of starting over
+        if (!keep && !stop && h.goal != null && !h.goal.done && h.task instanceof dev.timur.humans.plan.PlanTask && goal.isEmpty() && !steps.isEmpty()) {
+            List<String> rest = new ArrayList<>(), all = new ArrayList<>(), want = new ArrayList<>();
+            for (int i = 0; i < h.goal.steps.size(); i++) { all.add(h.goal.steps.get(i).describe()); if (i >= h.goal.stepIdx - 1) rest.add(h.goal.steps.get(i).describe()); }
+            for (var st : steps) want.add(st.describe());
+            if (want.equals(all) || rest.containsAll(want)) keep = true;
+        }
+        if (keep && !stop) {
+            HumanLog.log("mind_keep", h, "player", p.getName(), "task", h.task == null ? null : h.task.label());
+            if (h.goal != null && h.goal.fromId != null && !h.goal.fromId.equals(p.getUniqueId())) h.goal.note(p.getName() + " also wants this");
+            return;
+        }
+        if (!goal.isEmpty() || !steps.isEmpty()) {
+            StringBuilder said = new StringBuilder();
+            for (Human.Msg x : msgs) said.append(said.isEmpty() ? "" : " / ").append(x.text());
+            dev.timur.humans.plan.Goal g = new dev.timur.humans.plan.Goal(p.getName() + " said: \"" + trim(said.toString(), 220) + "\"" + (goal.isEmpty() ? "" : " - what's wanted: " + goal),
+                p.getName(), p.getUniqueId(), groupOf(h, p, lastText), m.now());
+            if (!title.isEmpty()) g.title = trim(title, 48);
+            if (!steps.isEmpty()) { g.steps = steps; g.quick = goal.isEmpty(); }
+            HumanLog.log("goal_new", h, "from", p.getName(), "text", g.text, "group", g.group, "quick", g.quick);
+            h.goal = g;
+            m.startTask(h, new Option("do_request", "do what " + p.getName() + " asked: " + g.title, () -> new dev.timur.humans.plan.PlanTask(g), 1));
+            h.commitUntil = m.now() + 20L * 60 * (g.quick ? 5 : 15);
+            h.commitWho = p.getName();
+            h.remember("agreed to " + p.getName() + "'s request: " + trim(lastText, 60));
+        }
+    }
+
+    private static String str(JsonObject o, String k) { return o.has(k) && o.get(k).isJsonPrimitive() ? o.get(k).getAsString() : ""; }
+    private static boolean bool(JsonObject o, String k) { try { return o.has(k) && o.get(k).isJsonPrimitive() && o.get(k).getAsBoolean(); } catch (Exception e) { return false; } }
 
     private static JsonObject choiceQ(String instructions, String[] pairs) {
         JsonObject q = new JsonObject(); q.addProperty("type", "choice"); q.addProperty("instructions", instructions);
@@ -112,11 +278,11 @@ public final class ChatBrain implements Listener {
         return q;
     }
 
-    private void respond(Human h, Player p, String text, boolean named) {
-        if (h.chatInFlight || h.sleeping && !named) return;
+    /** Fallback when DeepSeek is unavailable: Gemini Decision sorts the message into an intent. */
+    private void legacyRespond(Human h, Player p, String text, boolean named) {
+        if (h.chatInFlight) return;
         HumanManager m = plugin.manager();
         h.chatInFlight = true;
-        h.event(p.getName() + " said: \"" + text + "\"");
         if (!plugin.gemini().ready()) { offlineReply(h, p, text); h.chatInFlight = false; return; }
 
         // understand (one cheap Decision call)
@@ -328,22 +494,63 @@ public final class ChatBrain implements Listener {
 
     /** Spontaneous line (the decision brain decided this human wants to talk). */
     public void speakUp(Human h, String situation) {
-        if (h.chatInFlight || !h.valid()) return;
+        if (h.chatInFlight || h.mindBusy || !h.valid()) return;
         Player near = plugin.manager().nearestPlayer(h, 16);
         if (near == null) return;
         long nowMs = System.currentTimeMillis();
-        if (nowMs - h.lastTalkMs < 8000) return;
+        if (nowMs - h.lastTalkMs < 8000 || nowMs - h.lastSpontaneousMs < spontaneousCooldownMs()) return;
         h.lastTalkMs = nowMs;
         if (!plugin.text().ready() || !plugin.budget().canChat()) { broadcast(h, Canned.line(h, plugin.manager().rnd())); return; }
         plugin.budget().recordChat();
         h.chatInFlight = true;
         List<String> names = new ArrayList<>();
         for (Player p : h.entity.getWorld().getPlayers()) if (p.getLocation().distance(h.loc()) < 16) names.add(p.getName());
-        plugin.text().say(persona(h, near), "Say ONE short natural line out loud to the people nearby (" + String.join(", ", names) + "). " + situation)
+        plugin.text().say(persona(h, near), "Say ONE short natural line out loud to the people nearby (" + String.join(", ", names) + "). " + situation
+            + " Don't repeat what you or others already said (see the conversation), and don't ask again a question nobody answered yet."
+            + " If you have nothing new worth saying, reply with just: -")
             .whenComplete((line, err) -> Bukkit.getScheduler().runTask(plugin, () -> {
                 h.chatInFlight = false;
-                if (line != null && !line.isBlank() && h.valid()) { broadcast(h, line); h.event(h.name + " said: \"" + trim(line, 80) + "\""); }
+                if (h.valid()) saySpontaneous(h, line);
             }));
+    }
+
+    private long spontaneousCooldownMs() { return plugin.getConfig().getInt("chat.spontaneous_cooldown_seconds", 45) * 1000L; }
+
+    /**
+     * Unprompted lines (decisions, planner thoughts): rate-limited per human and never a near-repeat of what this human
+     * said in the last few minutes - so nobody nags or repeats the same question over and over.
+     */
+    public boolean saySpontaneous(Human h, String line) {
+        if (line == null) return false;
+        line = line.strip();
+        if (line.isEmpty() || line.equals("-") || line.equals("...")) return false;
+        long now = System.currentTimeMillis();
+        if (now - h.lastSpontaneousMs < spontaneousCooldownMs()) { HumanLog.log("say_skipped", h, "line", line, "why", "cooldown"); return false; }
+        if (repeats(h, line)) { HumanLog.log("say_skipped", h, "line", line, "why", "repeat"); return false; }
+        h.lastSpontaneousMs = now;
+        say(h, line);
+        return true;
+    }
+
+    /** Is this nearly the same as something this human said in the last 4 minutes? */
+    private boolean repeats(Human h, String line) {
+        Set<String> a = words(line);
+        if (a.size() < 2) return false;
+        long now = plugin.manager().now();
+        for (Human.Heard x : h.heard) {
+            if (!x.who().equals(h.name) || now - x.tick() > 20 * 240) continue;
+            Set<String> b = words(x.text());
+            Set<String> inter = new HashSet<>(a); inter.retainAll(b);
+            Set<String> uni = new HashSet<>(a); uni.addAll(b);
+            if (!uni.isEmpty() && inter.size() / (double) uni.size() >= 0.45) return true;
+        }
+        return false;
+    }
+
+    private static Set<String> words(String s) {
+        Set<String> out = new HashSet<>();
+        for (String w : s.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+")) if (w.length() > 2) out.add(w);
+        return out;
     }
 
     /** Thank a player for a gift (ready-made line, no AI). */
@@ -362,12 +569,15 @@ public final class ChatBrain implements Listener {
             + "You carry: " + h.inv.describe() + ". " + (h.hutBuilt ? "You have built your own house. " : "You don't have a house yet. ")
             + (h.recent.isEmpty() ? "" : "Recent events: " + String.join(" | ", h.recent) + ". ")
             + (h.memories.isEmpty() ? "" : "Memories: " + String.join(" | ", h.memories.stream().limit(8).toList()) + ". ")
+            + convoLine(h)
             + "Reply with ONE short spoken line (max 25 words) in the same language the player used. Be in character, natural, funny when it fits. "
             + "No asterisks, no emojis, no quotation marks, no narration.";
     }
 
     public void broadcast(Human h, String line) {
         HumanLog.log("say", h, "line", line, "task", h.task == null ? null : h.task.label());
+        long nowT = plugin.manager().now();
+        for (Human o : plugin.manager().all()) if (o.valid() && o.loc().getWorld() == h.loc().getWorld() && o.loc().distance(h.loc()) < 24) o.hear(h.name, line, nowT);
         Component msg = Component.text("<", NamedTextColor.GRAY).append(Component.text(h.name, NamedTextColor.GOLD)).append(Component.text("> ", NamedTextColor.GRAY)).append(Component.text(line, NamedTextColor.WHITE));
         for (Player p : h.entity.getWorld().getPlayers()) if (p.getLocation().distance(h.loc()) < 40) p.sendMessage(msg);
         h.say(line, plugin.manager().now());
@@ -391,6 +601,11 @@ public final class ChatBrain implements Listener {
         if (l.matches(".*\\b(bye|cya|later)\\b.*")) { replyCanned(h, p, "bye"); return; }
         if (l.matches(".*\\b(thanks|thank you|ty)\\b.*")) { replyCanned(h, p, "agree"); return; }
         broadcast(h, Canned.line(h, plugin.manager().rnd()));
+    }
+
+    private String convoLine(Human h) {
+        String c = h.conversation(plugin.manager().now(), 8, 20L * 60 * 4);
+        return c.isEmpty() ? "" : "Conversation around you: " + c.replace("\n", " | ") + ". ";
     }
 
     private static String trim(String s, int n) { return s.length() > n ? s.substring(0, n - 3) + "..." : s; }

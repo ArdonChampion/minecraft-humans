@@ -124,7 +124,7 @@ public final class TextClient {
             + (System.currentTimeMillis() < downUntilMs ? " (paused " + (downUntilMs - System.currentTimeMillis()) / 1000 + "s after errors)" : "");
     }
 
-    static String clean(String s) {
+    public static String clean(String s) {
         if (s == null) return null;
         s = s.replaceAll("(?s)<think>.*?</think>", "").replaceAll("\\*[^*]{0,40}\\*", "").replace("\n", " ").trim();
         if (s.startsWith("\"") && s.endsWith("\"") && s.length() > 1) s = s.substring(1, s.length() - 1);
