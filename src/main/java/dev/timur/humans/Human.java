@@ -79,6 +79,19 @@ public final class Human {
     public int fireNear; public boolean fireAtHome;
     public UUID alertFrom; public long alertTick;
 
+    // bigger plans, places, family
+    public dev.timur.humans.plan.Goal goal;     // multi-step goal the planner works on (from a player or self-chosen)
+    public long lastSelfPlanTick = -1_000_000;
+    public Location village;                    // their own settlement area (may build/dig here)
+    public Location bed;                        // foot block of their placed bed
+    public double growth = 1.0;                 // 1 = adult; children grow from 0.5
+    public final List<String> parents = new ArrayList<>();
+    public long lastBabyTick = -1_000_000;
+    public boolean underground;
+    public final Map<UUID, Long> chestPermission = new HashMap<>(); // player -> tick they allowed taking from their chests
+
+    public boolean isChild() { return growth < 1.0; }
+
     /** A question the human asked a player ("can I take bread from this chest?"). */
     public record Ask(org.bukkit.block.Block chest, org.bukkit.Material mat, UUID player, long tick) {}
     public Ask ask;

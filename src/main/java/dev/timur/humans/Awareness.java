@@ -43,6 +43,38 @@ public final class Awareness {
         return seen.size() < 350; // explored everything reachable and it's tiny
     }
 
+    /** Solid ground (not tree leaves) well above us = we're in a cave. Jungle canopies don't count. */
+    public static boolean isUnderground(Location l) {
+        int top = l.getWorld().getHighestBlockYAt(l.getBlockX(), l.getBlockZ(), org.bukkit.HeightMap.MOTION_BLOCKING_NO_LEAVES);
+        return top > l.getBlockY() + 3 && l.getBlock().getLightFromSky() < 8;
+    }
+
+    /** Nearest walkable spot under the open sky (BFS over walkable nodes), or null. */
+    public static int[] findSky(Human h, int maxNodes) {
+        Location l = h.loc(); World w = l.getWorld();
+        int[] s = Navigator.standSpot(l);
+        if (s == null) s = new int[]{l.getBlockX(), l.getBlockY(), l.getBlockZ()};
+        ArrayDeque<int[]> q = new ArrayDeque<>(); Set<Long> seen = new HashSet<>();
+        q.add(s); seen.add(key(s[0], s[1], s[2]));
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        while (!q.isEmpty() && seen.size() < maxNodes) {
+            int[] n = q.poll();
+            if (!isUnderground(new Location(w, n[0] + 0.5, n[1], n[2] + 0.5))) return n;
+            for (int[] d : dirs) {
+                int nx = n[0] + d[0], nz = n[2] + d[1];
+                for (int dy : new int[]{0, 1, -1, -2, -3}) {
+                    int ny = n[1] + dy;
+                    if (dy == 1 && !Navigator.passableNav(w.getBlockAt(n[0], n[1] + 2, n[2]))) continue;
+                    if (dy < 0 && !(Navigator.passableNav(w.getBlockAt(nx, n[1], nz)) && Navigator.passableNav(w.getBlockAt(nx, n[1] + 1, nz)))) break;
+                    if (!Navigator.standableNav(w, nx, ny, nz)) continue;
+                    if (seen.add(key(nx, ny, nz))) q.add(new int[]{nx, ny, nz});
+                    break;
+                }
+            }
+        }
+        return null;
+    }
+
     private static long key(int x, int y, int z) { return ((long) x & 0x3FFFFFF) << 38 | ((long) z & 0x3FFFFFF) << 12 | (y & 0xFFF); }
 
     /** Burning fire blocks around a spot (ignores fireplaces on netherrack etc.). */
@@ -78,6 +110,10 @@ public final class Awareness {
     public static void update(Human h, HumanManager m, HumansPlugin plugin) {
         if (h.sleeping) return;
         long now = m.now();
+        Location here = h.loc();
+        boolean under = isUnderground(here);
+        if (under && !h.underground && !(h.task instanceof dev.timur.humans.tasks.Work.StripMine)) h.event("I'm underground in a cave");
+        h.underground = under;
         boolean tr = h.task instanceof dev.timur.humans.tasks.Life.Escape ? h.trapped : trapped(h);
         if (tr && !h.trapped) {
             h.trapped = true; h.trappedSince = now;

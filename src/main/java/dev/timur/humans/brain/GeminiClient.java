@@ -54,6 +54,31 @@ public final class GeminiClient {
         });
     }
 
+    /** Free text from Flash-Lite (used as a fallback for the main text AI). */
+    public CompletableFuture<String> generate(String system, String user, int maxTokens) {
+        JsonObject body = new JsonObject();
+        JsonObject sys = new JsonObject(); JsonArray sp = new JsonArray(); JsonObject st = new JsonObject();
+        st.addProperty("text", system); sp.add(st); sys.add("parts", sp);
+        body.add("systemInstruction", sys);
+        JsonArray contents = new JsonArray(); JsonObject c = new JsonObject(); c.addProperty("role", "user");
+        JsonArray parts = new JsonArray(); JsonObject pt = new JsonObject(); pt.addProperty("text", user); parts.add(pt); c.add("parts", parts);
+        contents.add(c); body.add("contents", contents);
+        JsonObject gen = new JsonObject();
+        gen.addProperty("maxOutputTokens", maxTokens);
+        gen.addProperty("temperature", 0.9);
+        JsonObject think = new JsonObject(); think.addProperty("thinkingLevel", "minimal"); gen.add("thinkingConfig", think);
+        body.add("generationConfig", gen);
+        String model = plugin.getConfig().getString("gemini.chat_model", "gemini-3.5-flash-lite");
+        return post("models/" + model + ":generateContent", body).thenApply(j -> {
+            StringBuilder sb = new StringBuilder();
+            for (var part : j.getAsJsonArray("candidates").get(0).getAsJsonObject().getAsJsonObject("content").getAsJsonArray("parts")) {
+                JsonObject po = part.getAsJsonObject();
+                if (po.has("text") && !(po.has("thought") && po.get("thought").getAsBoolean())) sb.append(po.get("text").getAsString());
+            }
+            return sb.toString();
+        });
+    }
+
     /** One short spoken line from the chat model. */
     public CompletableFuture<String> say(String system, String user) {
         JsonObject body = new JsonObject();
@@ -90,7 +115,7 @@ public final class GeminiClient {
     private CompletableFuture<JsonObject> post(String path, JsonObject body) {
         if (!ready()) return CompletableFuture.failedFuture(new IllegalStateException("no API key"));
         HttpRequest req = HttpRequest.newBuilder(URI.create(BASE + path))
-            .timeout(Duration.ofSeconds(15))
+            .timeout(Duration.ofSeconds(25))
             .header("Content-Type", "application/json")
             .header("x-goog-api-key", key)
             .POST(HttpRequest.BodyPublishers.ofString(body.toString()))

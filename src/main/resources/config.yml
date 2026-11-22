@@ -5,6 +5,32 @@ gemini:
   decision_model: gemini-decision-1
   chat_model: gemini-3.5-flash-lite
 
+# Text AI for speech and planning: any OpenAI-compatible endpoint. Falls back to Gemini Flash-Lite if it fails.
+text:
+  base_url: https://100milionseek.top/v1
+  model: deepseek-v4.1-flash-free
+  # File containing the API key (never put the key itself in this config)
+  api_key_file: plugins/Humans/text.key
+  per_minute: 30
+  speech_max_tokens: 900
+  plan_max_tokens: 4000
+  plan_timeout_seconds: 70
+
+planner:
+  # Max planning rounds per goal before a human gives up
+  max_rounds: 20
+
+family:
+  food_needed: 6
+  food_used: 6
+  cooldown_minutes: 20
+  grow_up_minutes: 20
+  max_humans: 16
+
+zones:
+  # Humans won't break/build/pick up within this many blocks of players' chests, beds, furnaces, signs...
+  auto_radius: 9
+
 budget:
   # Gemini Decision 1 free tier: 200 RPM, 50k TPM, 10k RPD. We stay well under.
   decisions_per_day: 9000

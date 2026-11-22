@@ -85,6 +85,7 @@ public final class HumansCommand implements TabExecutor {
                 Human h = find(s, a); if (h == null) return true;
                 m.interrupt(h, "felt like reconsidering"); msg(s, h.name + " will rethink.");
             }
+            case "text" -> msg(s, plugin.text().status());
             case "budget" -> {
                 for (String line : plugin.budget().summary().split("\n")) msg(s, line);
                 msg(s, "Decisions so far: " + plugin.brain().aiDecisions + " AI, " + plugin.brain().fallbackDecisions + " offline");
@@ -105,6 +106,46 @@ public final class HumansCommand implements TabExecutor {
                     }
                     msg(s, sb.toString());
                 }
+            }
+            case "protect" -> { // /humans protect <radius> [name] - a players' area humans must leave alone
+                if (!(s instanceof Player p)) { msg(s, "Players only."); return true; }
+                int r = a.length > 1 ? Math.max(4, Math.min(200, Integer.parseInt(a[1]))) : 30;
+                plugin.zones().add(p.getLocation(), r, a.length > 2 ? a[2] : p.getName() + "'s base");
+                msg(s, "Protected a " + r + "-block radius around you. Humans won't break, build or pick up items here.");
+            }
+            case "unprotect" -> {
+                if (!(s instanceof Player p)) { msg(s, "Players only."); return true; }
+                msg(s, "Removed " + plugin.zones().removeAt(p.getLocation()) + " protected area(s) covering this spot.");
+            }
+            case "zones" -> {
+                if (plugin.zones().manual().isEmpty()) msg(s, "No manual zones. (Automatic: " + plugin.getConfig().getInt("zones.auto_radius", 9) + " blocks around players' chests/beds/furnaces/signs.)");
+                for (var z : plugin.zones().manual()) msg(s, z.name() + ": " + z.world() + " " + z.x() + "," + z.z() + " r=" + z.r());
+            }
+            case "goal" -> { // /humans goal <name> <text...> - give a human a goal (testing / admin)
+                if (a.length < 3) { msg(s, "/humans goal <name> <what to do>"); return true; }
+                Human h = m.byName(a[1]);
+                if (h == null || !h.valid()) { msg(s, "No such (loaded) human."); return true; }
+                String text = String.join(" ", Arrays.copyOfRange(a, 2, a.length));
+                dev.timur.humans.plan.Goal g = new dev.timur.humans.plan.Goal("Admin says: \"" + text + "\"", s.getName(), s instanceof Player p ? p.getUniqueId() : null, "", m.now());
+                h.goal = g;
+                m.startTask(h, new dev.timur.humans.brain.Option("do_request", "goal", () -> new dev.timur.humans.plan.PlanTask(g), 1));
+                h.commitUntil = m.now() + 20L * 60 * 15; h.commitWho = s.getName();
+                msg(s, h.name + " is now working on: " + text);
+            }
+            case "cancel" -> {
+                Human h = a.length > 1 ? m.byName(a[1]) : null;
+                if (h == null) { msg(s, "/humans cancel <name>"); return true; }
+                h.goal = null; h.commitUntil = 0; if (h.task != null && h.valid()) { h.task.stop(h); h.task = null; } h.needsThink = true;
+                msg(s, h.name + " dropped their goal.");
+            }
+            case "plan" -> {
+                Human h = a.length > 1 ? m.byName(a[1]) : null;
+                if (h == null) { msg(s, "/humans plan <name>"); return true; }
+                if (h.goal == null) { msg(s, h.name + " has no goal right now."); return true; }
+                msg(s, h.name + " goal: " + h.goal.title + " (round " + h.goal.rounds + ", step " + h.goal.stepIdx + "/" + h.goal.steps.size() + ")");
+                if (!h.goal.lastThought.isEmpty()) msg(s, "Thinking: " + h.goal.lastThought);
+                for (int i = 0; i < h.goal.steps.size(); i++) msg(s, (i == h.goal.stepIdx ? "> " : "  ") + h.goal.steps.get(i).describe());
+                for (String l : h.goal.log.subList(Math.max(0, h.goal.log.size() - 6), h.goal.log.size())) msg(s, "  done: " + l);
             }
             case "debug" -> { plugin.toggleDebug(); msg(s, "Debug logging " + (plugin.debug() ? "on" : "off")); }
             case "pack" -> { if (s instanceof Player p) plugin.pack().send(p); }

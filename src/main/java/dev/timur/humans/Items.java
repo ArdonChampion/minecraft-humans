@@ -80,7 +80,8 @@ public final class Items {
             case BEEF -> Material.COOKED_BEEF; case PORKCHOP -> Material.COOKED_PORKCHOP;
             case MUTTON -> Material.COOKED_MUTTON; case CHICKEN -> Material.COOKED_CHICKEN;
             case RAW_IRON -> Material.IRON_INGOT; case RAW_GOLD -> Material.GOLD_INGOT;
-            case POTATO -> Material.BAKED_POTATO; default -> null;
+            case POTATO -> Material.BAKED_POTATO; case SAND, RED_SAND -> Material.GLASS; case COBBLESTONE -> Material.STONE;
+            case RAW_COPPER -> Material.COPPER_INGOT; case COD -> Material.COOKED_COD; case SALMON -> Material.COOKED_SALMON; default -> null;
         };
     }
 
@@ -170,6 +171,25 @@ public final class Items {
         new Recipe("bed", Material.WHITE_BED, 1, in(Tag.WOOL, 3, Tag.PLANKS, 3), true),
         new Recipe("bread", Material.BREAD, 1, in(Material.WHEAT, 3), true),
         new Recipe("diamond_sword", Material.DIAMOND_SWORD, 1, in(Material.DIAMOND, 2, Material.STICK, 1), true),
-        new Recipe("diamond_pickaxe", Material.DIAMOND_PICKAXE, 1, in(Material.DIAMOND, 3, Material.STICK, 2), true)
+        new Recipe("diamond_pickaxe", Material.DIAMOND_PICKAXE, 1, in(Material.DIAMOND, 3, Material.STICK, 2), true),
+        new Recipe("wooden_hoe", Material.WOODEN_HOE, 1, in(Tag.PLANKS, 2, Material.STICK, 2), true),
+        new Recipe("stone_hoe", Material.STONE_HOE, 1, in(Material.COBBLESTONE, 2, Material.STICK, 2), true),
+        new Recipe("iron_hoe", Material.IRON_HOE, 1, in(Material.IRON_INGOT, 2, Material.STICK, 2), true),
+        new Recipe("wooden_shovel", Material.WOODEN_SHOVEL, 1, in(Tag.PLANKS, 1, Material.STICK, 2), true),
+        new Recipe("stone_shovel", Material.STONE_SHOVEL, 1, in(Material.COBBLESTONE, 1, Material.STICK, 2), true),
+        new Recipe("iron_shovel", Material.IRON_SHOVEL, 1, in(Material.IRON_INGOT, 1, Material.STICK, 2), true),
+        new Recipe("fence", Material.OAK_FENCE, 3, in(Tag.PLANKS, 4, Material.STICK, 2), true),
+        new Recipe("fence_gate", Material.OAK_FENCE_GATE, 1, in(Tag.PLANKS, 2, Material.STICK, 4), true),
+        new Recipe("chest", Material.CHEST, 1, in(Tag.PLANKS, 8), true),
+        new Recipe("ladder", Material.LADDER, 3, in(Material.STICK, 7), true),
+        new Recipe("bucket", Material.BUCKET, 1, in(Material.IRON_INGOT, 3), true),
+        new Recipe("iron_helmet", Material.IRON_HELMET, 1, in(Material.IRON_INGOT, 5), true),
+        new Recipe("iron_chestplate", Material.IRON_CHESTPLATE, 1, in(Material.IRON_INGOT, 8), true),
+        new Recipe("iron_leggings", Material.IRON_LEGGINGS, 1, in(Material.IRON_INGOT, 7), true),
+        new Recipe("iron_boots", Material.IRON_BOOTS, 1, in(Material.IRON_INGOT, 4), true),
+        new Recipe("stone_bricks", Material.STONE_BRICKS, 4, in(Material.STONE, 4), true),
+        new Recipe("glass_pane", Material.GLASS_PANE, 16, in(Material.GLASS, 6), true),
+        new Recipe("campfire", Material.CAMPFIRE, 1, in(Material.STICK, 3, Material.COAL, 1, Tag.LOGS, 3), true),
+        new Recipe("boat", Material.OAK_BOAT, 1, in(Tag.PLANKS, 5), true)
     );
 }

@@ -52,6 +52,10 @@ public final class ChatBrain implements Listener {
         "request_feed_animals", "asking them to feed or breed animals",
         "request_farm", "asking them to harvest crops / farm",
         "request_explore", "asking them to go exploring",
+        "request_go_outside", "telling them to get out of a cave / go outside / come up",
+        "request_place_bed", "telling them to place or use a bed",
+        "request_baby", "asking them to have a baby / start a family / make a child",
+        "request_goal", "asking them to do a bigger or multi-step job: get specific resources (iron, diamonds, food...), build something (village, house, farm, pen, statue...), organise, line up, prepare for night, set up a base, etc.",
         "request_other", "asking them to do some other specific thing not listed here"
     };
     private static final String[] REPLIES = {
@@ -152,17 +156,47 @@ public final class ChatBrain implements Listener {
             if (it.equals("compliment") || it.equals("apology")) h.remember(p.getName() + " was nice to me (" + it + ")");
             if (plugin.debug()) plugin.getLogger().info("[debug] chat " + p.getName() + "->" + h.name + ": intent=" + it + " reply=" + kind + " trust=" + String.format("%.2f", idx) + " face=" + face);
 
-            if (it.startsWith("request_") && !it.equals("request_other")) { handleRequest(h, p, it); return; }
+            if (it.equals("request_goal") || it.equals("request_other")) { handleGoal(h, p, text, groupOf(h, p, text)); return; }
+            if (it.startsWith("request_")) { handleRequest(h, p, it); return; }
             if ((it.equals("yes") || it.equals("no")) && h.ask != null && h.ask.player().equals(p.getUniqueId()) && m.now() - h.ask.tick() < 20 * 120) { handleAnswer(h, p, it.equals("yes")); return; }
             if (it.equals("warning")) { handleWarning(h, p, text); return; }
 
-            String extra = it.equals("request_other") ? " (They are asking you to do something. You are a simple Minecraft villager-like person: say whether you would and joke about it, but you can't actually do unusual things.)" : "";
-            if (kind.equals("talk") || it.equals("question") || !extra.isEmpty()) talk(h, p, text, extra);
+            if (kind.equals("talk") || it.equals("question")) talk(h, p, text, "");
             else replyCanned(h, p, kind);
         }));
     }
 
     // ---------------------------------------------------------------- requests
+
+    /** Other humans addressed by the same message (for teamwork). */
+    private String groupOf(Human h, Player p, String text) {
+        String lower = text.toLowerCase(Locale.ROOT);
+        boolean everyone = lower.matches(".*\\b(everyone|everybody|guys|all of you|y'all|you all)\\b.*");
+        List<String> names = new ArrayList<>();
+        for (Human o : plugin.manager().all()) {
+            if (o == h || !o.valid() || o.loc().getWorld() != p.getWorld() || o.loc().distance(p.getLocation()) > 64) continue;
+            if (everyone && o.loc().distance(p.getLocation()) < 24 || lower.matches(".*\\b" + java.util.regex.Pattern.quote(o.name.toLowerCase(Locale.ROOT)) + "\\b.*")) names.add(o.name);
+        }
+        return String.join(", ", names);
+    }
+
+    /** A bigger job: becomes a Goal the planner AI works through step by step. */
+    public void handleGoal(Human h, Player p, String text, String group) {
+        HumanManager m = plugin.manager();
+        if (!plugin.text().ready()) { later(10, () -> say(h, Lines.pick(Lines.CANT, h, p.getName(), null))); return; }
+        boolean yes = m.rnd().nextDouble() < acceptChance(h, p, "request_goal");
+        later(6 + m.rnd().nextInt(14), () -> {
+            if (!h.valid()) return;
+            if (!yes) { say(h, Lines.pick(Lines.REFUSE, h, p.getName(), null)); h.remember("refused " + p.getName() + "'s request: " + trim(text, 60)); return; }
+            say(h, Lines.pick(Lines.AGREE, h, p.getName(), null));
+            dev.timur.humans.plan.Goal g = new dev.timur.humans.plan.Goal(p.getName() + " said: \"" + trim(text, 200) + "\"", p.getName(), p.getUniqueId(), group, m.now());
+            h.goal = g;
+            m.startTask(h, new Option("do_request", "work on " + p.getName() + "'s request", () -> new dev.timur.humans.plan.PlanTask(g), 1));
+            h.commitUntil = m.now() + 20L * 60 * 15;
+            h.commitWho = p.getName();
+            h.remember("agreed to " + p.getName() + "'s request: " + trim(text, 60));
+        });
+    }
 
     /** Accept chance: humans are cooperative; only people they dislike get refused often. */
     private double acceptChance(Human h, Player p, String intent) {
@@ -187,6 +221,7 @@ public final class ChatBrain implements Listener {
             if (!h.valid()) return;
             if (yes) {
                 say(h, Lines.pick(Lines.AGREE, h, p.getName(), null));
+                if (intent.equals("request_stop") || intent.equals("request_go_home")) { if (h.goal != null) h.event("stopped working on: " + h.goal.title); h.goal = null; }
                 m.startTask(h, r.option());
                 h.commitUntil = m.now() + 20 * 120;
                 h.commitWho = p.getName();
@@ -208,6 +243,7 @@ public final class ChatBrain implements Listener {
             if (yes) {
                 say(h, Lines.pick(Lines.ASK_OK, h, p.getName(), null));
                 h.express(Expression.HAPPY, 40, plugin, m.now());
+                h.chestPermission.put(p.getUniqueId(), m.now());
                 m.startTask(h, new Option("do_request", "take from chest", () -> new Life.TakeFromChest(ask.chest(), ask.mat(), p.getName()), 1));
             } else {
                 say(h, Lines.pick(Lines.ASK_DENIED, h, p.getName(), null));
@@ -266,7 +302,7 @@ public final class ChatBrain implements Listener {
         if (!plugin.budget().canChat()) { replyCanned(h, p, "shrug"); return; }
         plugin.budget().recordChat();
         h.chatInFlight = true;
-        plugin.gemini().say(persona(h, p), p.getName() + " says to you: " + text + extra).whenComplete((line, e2) -> Bukkit.getScheduler().runTask(plugin, () -> {
+        plugin.text().say(persona(h, p), p.getName() + " says to you: " + text + extra).whenComplete((line, e2) -> Bukkit.getScheduler().runTask(plugin, () -> {
             h.chatInFlight = false;
             if (!h.valid()) return;
             if (line == null || line.isBlank()) { replyCanned(h, p, "shrug"); return; }
@@ -290,12 +326,12 @@ public final class ChatBrain implements Listener {
         long nowMs = System.currentTimeMillis();
         if (nowMs - h.lastTalkMs < 8000) return;
         h.lastTalkMs = nowMs;
-        if (!plugin.gemini().ready() || !plugin.budget().canChat()) { broadcast(h, Canned.line(h, plugin.manager().rnd())); return; }
+        if (!plugin.text().ready() || !plugin.budget().canChat()) { broadcast(h, Canned.line(h, plugin.manager().rnd())); return; }
         plugin.budget().recordChat();
         h.chatInFlight = true;
         List<String> names = new ArrayList<>();
         for (Player p : h.entity.getWorld().getPlayers()) if (p.getLocation().distance(h.loc()) < 16) names.add(p.getName());
-        plugin.gemini().say(persona(h, near), "Say ONE short natural line out loud to the people nearby (" + String.join(", ", names) + "). " + situation)
+        plugin.text().say(persona(h, near), "Say ONE short natural line out loud to the people nearby (" + String.join(", ", names) + "). " + situation)
             .whenComplete((line, err) -> Bukkit.getScheduler().runTask(plugin, () -> {
                 h.chatInFlight = false;
                 if (line != null && !line.isBlank() && h.valid()) { broadcast(h, line); h.event(h.name + " said: \"" + trim(line, 80) + "\""); }

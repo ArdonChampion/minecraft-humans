@@ -99,12 +99,60 @@ public final class HumanManager {
         link(h, m);
     }
 
+    /** A baby: mix of both parents, starts small and grows up. */
+    public Human spawnChild(Human a, Human b, Location at) {
+        Personality pa = a.personality, pb = b.personality;
+        java.util.function.DoubleBinaryOperator mix = (x, y) -> Math.max(0, Math.min(1, (x + y) / 2 + rnd.nextGaussian() * 0.15));
+        Personality p = new Personality(mix.applyAsDouble(pa.bravery(), pb.bravery()), mix.applyAsDouble(pa.friendliness(), pb.friendliness()),
+            mix.applyAsDouble(pa.diligence(), pb.diligence()), mix.applyAsDouble(pa.generosity(), pb.generosity()), mix.applyAsDouble(pa.chattiness(), pb.chattiness()),
+            rnd.nextBoolean() ? pa.quirk() : pb.quirk(), rnd.nextBoolean() ? pa.speech() : pb.speech());
+        Human c = new Human(UUID.randomUUID(), freshName(), rnd.nextBoolean() ? a.look : b.look, p);
+        c.growth = 0.5;
+        c.parents.add(a.name); c.parents.add(b.name);
+        c.home = (a.home != null ? a.home : at).clone();
+        c.village = a.village != null ? a.village : b.village;
+        c.hunger = 20;
+        c.remember("I was born! My parents are " + a.name + " and " + b.name);
+        a.trust.forEach((k, v) -> c.trust.put(k, (v + b.trustOf(k)) / 2)); a.knownNames.forEach(c.knownNames::putIfAbsent);
+        humans.put(c.id, c);
+        spawnBody(c, at);
+        save(c);
+        Component msg = Component.text("♥ " + a.name + " and " + b.name + " had a baby: " + c.name + "!", NamedTextColor.LIGHT_PURPLE);
+        for (Player pl : at.getWorld().getPlayers()) if (pl.getLocation().distance(at) < 64) pl.sendMessage(msg);
+        at.getWorld().spawnParticle(Particle.HEART, at.clone().add(0, 1, 0), 8, 0.5, 0.5, 0.5);
+        return c;
+    }
+
+    void applyScale(Human h) {
+        if (!h.valid()) return;
+        var attr = h.entity.getAttribute(Attribute.SCALE);
+        if (attr != null) { double want = Math.max(0.5, Math.min(1, h.growth)); if (Math.abs(attr.getBaseValue() - want) > 0.005) attr.setBaseValue(want); }
+    }
+
+    /** Wear the best armour they carry. */
+    void wearArmor(Human h) {
+        var eq = h.entity.getEquipment();
+        String[][] slots = {{"_HELMET", "h"}, {"_CHESTPLATE", "c"}, {"_LEGGINGS", "l"}, {"_BOOTS", "b"}};
+        for (String[] sl : slots) {
+            Material best = Items.best(h.inv, sl[0]).orElse(null);
+            if (best == null) continue;
+            org.bukkit.inventory.ItemStack it = new org.bukkit.inventory.ItemStack(best);
+            switch (sl[1]) {
+                case "h" -> { if (eq.getHelmet() == null || eq.getHelmet().getType() != best) eq.setHelmet(it); }
+                case "c" -> { if (eq.getChestplate() == null || eq.getChestplate().getType() != best) eq.setChestplate(it); }
+                case "l" -> { if (eq.getLeggings() == null || eq.getLeggings().getType() != best) eq.setLeggings(it); }
+                default -> { if (eq.getBoots() == null || eq.getBoots().getType() != best) eq.setBoots(it); }
+            }
+        }
+    }
+
     public void link(Human h, Mannequin m) {
         if (h.entity != null && h.entity.isValid() && !h.entity.equals(m)) { m.remove(); return; } // duplicate body
         h.entity = m;
         h.shown = null;
         byEntity.put(m.getUniqueId(), h);
         h.updateFace(plugin, now);
+        applyScale(h);
     }
 
     public void onEntityAdded(Entity e) {
@@ -194,6 +242,7 @@ public final class HumanManager {
             return;
         }
         if (!h.valid()) return;
+        if (!h.entity.isTicking()) { if (h.nav.active()) h.nav.stop(); return; } // chunk loading/unloading: don't move them
         boolean awake = cachedAwake(h);
         if (!awake) { if (h.nav.active()) h.nav.stop(); return; }
 
@@ -207,11 +256,18 @@ public final class HumanManager {
             double before = h.energy;
             h.energy = Math.max(0, Math.min(20, h.energy + (resting ? (h.sleeping ? 0.35 : 0.15) : h.task.isWork() ? -0.06 : -0.015)));
             if (before >= 5 && h.energy < 5) h.event("I'm getting really tired");
+            if (h.isChild()) {
+                h.growth = Math.min(1.0, h.growth + 0.5 / (60.0 * plugin.getConfig().getInt("family.grow_up_minutes", 20)));
+                if (now % 200 == 0 || h.growth >= 1.0) applyScale(h);
+                if (h.growth >= 1.0) { h.remember("I grew up!"); h.express(Expression.HAPPY, 80, plugin, now); h.event("I grew up and I'm an adult now"); }
+            }
+            if (now % 100 == 0) wearArmor(h);
             double max = h.entity.getAttribute(Attribute.MAX_HEALTH).getValue();
             if (now % 80 == 0 && h.hunger >= 14 && h.entity.getHealth() < max) h.entity.setHealth(Math.min(max, h.entity.getHealth() + 1));
             if (now % 80 == 0 && h.hunger <= 0 && h.entity.getHealth() > 2) { h.entity.damage(1); h.event("is starving"); }
         }
         if (now % 4 == 0) pickupReflex(h);
+        if (now % 40 == 0) eatReflex(h);
         swimReflex(h);
         if (now % 10 == 0) dangerReflex(h);
         if ((now + (h.id.hashCode() & 31)) % 40 == 0) Awareness.update(h, this, plugin);
@@ -222,7 +278,7 @@ public final class HumanManager {
             Task.Status s = t.tick(h, this);
             if (s != Task.Status.RUNNING && h.task == t) finishTask(h, t, s);
             else if (h.task != null && !h.thinking && !h.needsThink && !(h.task instanceof Tasks.Sleep) && now > h.commitUntil
-                && now - h.lastThinkTick > plugin.getConfig().getInt("brain.rethink_seconds", 30) * 20L) h.needsThink = true;
+                && now - h.lastThinkTick > plugin.getConfig().getInt("brain.rethink_seconds", 30) * 20L * (h.task instanceof dev.timur.humans.plan.PlanTask ? 3 : 1)) h.needsThink = true;
         } else {
             h.needsThink = true;
             if (now % 10 == 0) { Player p = nearestPlayer(h, 6); if (p != null) Act.lookAt(h, p.getEyeLocation()); }
@@ -270,6 +326,10 @@ public final class HumanManager {
 
     private void finishTask(Human h, Task t, Task.Status s) {
         t.stop(h);
+        if (t instanceof dev.timur.humans.plan.PlanTask pt && (pt.goal().done || s == Task.Status.FAIL) && h.goal == pt.goal()) {
+            h.goal = null;
+            if (s == Task.Status.SUCCESS) { h.remember("I finished: " + pt.goal().title); h.express(Expression.HAPPY, 60, plugin, now); }
+        }
         if (t instanceof Tasks.Goto g && g.label().equals("swimming to shore")) h.swimFails = s == Task.Status.FAIL ? h.swimFails + 1 : 0;
         h.task = null;
         h.commitUntil = 0;
@@ -346,6 +406,8 @@ public final class HumanManager {
     // ---------------------------------------------------------------- reflexes (no AI)
 
     public boolean mayPickUp(Human h, Item it) {
+        UUID thrownBy = it.getThrower();
+        if (plugin.zones().isProtected(it.getLocation(), h) && (thrownBy == null || Bukkit.getPlayer(thrownBy) == null)) return false; // players' stuff in their base
         UUID owner = it.getOwner();
         if (owner != null && !owner.equals(h.entity.getUniqueId())) return false;
         UUID thrower = it.getThrower();
@@ -372,6 +434,23 @@ public final class HumanManager {
         h.remember(giver.getName() + " gave me " + what);
         h.express(Expression.HAPPY, 80, plugin, now);
         plugin.chat().thank(h, giver, what);
+    }
+
+    /** Like a player: when hungry, just eat something from the inventory (even in the middle of a job). */
+    private void eatReflex(Human h) {
+        if (h.hunger >= 9 || h.task instanceof Tasks.Eat || h.sleeping) {
+            return;
+        }
+        Material f = Items.bestFood(h.inv).orElse(null);
+        if (f == null) {
+            if (h.hunger < 5 && now % 1200 == 0) h.event("I'm starving and have no food!");
+            return;
+        }
+        h.inv.remove(f, 1);
+        h.hunger = Math.min(20, h.hunger + Items.foodValue(f) * 1.5);
+        h.entity.getWorld().playSound(h.loc(), "entity.generic.eat", 0.7f, 1f);
+        h.entity.getWorld().playSound(h.loc(), "entity.player.burp", 0.5f, 1f);
+        h.event("ate " + Items.nice(f) + " on the go");
     }
 
     /** Players hold space in water; so do humans. Low on air -> head for land. */
@@ -509,6 +588,16 @@ public final class HumanManager {
                 h.hutCenter = y.getLocation("hut_center");
                 h.hunger = y.getDouble("hunger", 20);
                 h.energy = y.getDouble("energy", 20);
+                h.village = y.getLocation("village");
+                h.bed = y.getLocation("bed");
+                h.growth = y.getDouble("growth", 1.0);
+                h.parents.addAll(y.getStringList("parents"));
+                if (y.isString("goal.text")) {
+                    String fid = y.getString("goal.from_id");
+                    h.goal = new dev.timur.humans.plan.Goal(y.getString("goal.text"), y.getString("goal.from"), fid == null ? null : UUID.fromString(fid), y.getString("goal.group", ""), 0);
+                    h.goal.title = y.getString("goal.title", h.goal.title);
+                    h.goal.note("(the server restarted - check where you are and continue)");
+                }
                 h.project = y.getString("project");
                 h.dead = y.getBoolean("dead");
                 if (h.dead) h.respawnAtMs = System.currentTimeMillis() + 10_000;
@@ -540,6 +629,11 @@ public final class HumanManager {
         y.set("home", h.home); y.set("hut_built", h.hutBuilt); y.set("hut_center", h.hutCenter);
         y.set("hunger", h.hunger); y.set("dead", h.dead); y.set("mood", h.mood.id());
         y.set("energy", h.energy); y.set("project", h.project);
+        y.set("village", h.village); y.set("bed", h.bed); y.set("growth", h.growth); y.set("parents", new ArrayList<>(h.parents));
+        if (h.goal != null && !h.goal.done) {
+            y.set("goal.text", h.goal.text); y.set("goal.title", h.goal.title); y.set("goal.from", h.goal.from);
+            y.set("goal.from_id", h.goal.fromId == null ? null : h.goal.fromId.toString()); y.set("goal.group", h.goal.group);
+        }
         y.createSection("inventory", h.inv.serialize());
         Map<String, Object> tr = new LinkedHashMap<>(); h.trust.forEach((k, v) -> tr.put(k.toString(), v)); y.createSection("trust", tr);
         Map<String, Object> nm = new LinkedHashMap<>(); h.knownNames.forEach((k, v) -> nm.put(k.toString(), v)); y.createSection("names", nm);

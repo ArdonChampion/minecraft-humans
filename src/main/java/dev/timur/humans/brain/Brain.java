@@ -194,6 +194,9 @@ public final class Brain {
         s.append("Inventory: ").append(h.inv.describe()).append(".\n");
         if (h.home != null && h.home.getWorld() == h.loc().getWorld())
             s.append("Home: ").append(Math.round(h.home.distance(h.loc()))).append(" blocks away, ").append(h.hutBuilt ? "has a house there." : "no house built yet.").append("\n");
+        if (h.goal != null && !h.goal.done) s.append("Current goal: ").append(h.goal.title).append(h.goal.from != null ? " (asked by " + h.goal.from + ")" : "").append(".\n");
+        if (h.underground) s.append("! ").append(h.name).append(" is underground in a cave.\n");
+        if (h.isChild()) s.append(h.name).append(" is a CHILD (parents: ").append(String.join(", ", h.parents)).append(") - plays, doesn't work.\n");
         if (h.project != null) s.append("Personal project: ").append(OptionGenerator.projectDesc(h.project)).append(".\n");
         if (h.trapped) s.append("!! ").append(h.name).append(" is TRAPPED ").append(h.trappedOpenSky ? "at the bottom of a hole" : "in an enclosed space").append(" and cannot walk away - must dig/climb out.\n");
         if (h.fireAtHome) s.append("!! ").append(h.name).append("'s HOUSE IS ON FIRE.\n");

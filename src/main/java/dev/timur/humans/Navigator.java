@@ -141,7 +141,7 @@ public final class Navigator {
         openedDoor = null;
     }
 
-    static double horizDist(Location a, Location b) {
+    public static double horizDist(Location a, Location b) {
         double dx = a.getX() - b.getX(), dz = a.getZ() - b.getZ();
         return Math.sqrt(dx * dx + dz * dz);
     }

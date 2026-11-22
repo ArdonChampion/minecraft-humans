@@ -35,7 +35,7 @@ public final class Life {
             if (t.getHardness() < 0 || t == Material.WATER || t == Material.LAVA) return false;
             String n = t.name();
             return Tag.MINEABLE_SHOVEL.isTagged(t) || Tag.LEAVES.isTagged(t) || n.endsWith("_ORE") || Tag.BASE_STONE_OVERWORLD.isTagged(t)
-                || t == Material.COBBLESTONE || t == Material.COBBLED_DEEPSLATE || t == Material.CALCITE || t == Material.DRIPSTONE_BLOCK
+                || t == Material.CALCITE || t == Material.DRIPSTONE_BLOCK
                 || t == Material.SANDSTONE || t == Material.RED_SANDSTONE || t == Material.TERRACOTTA || n.endsWith("_TERRACOTTA") && !n.contains("GLAZED")
                 || t == Material.NETHERRACK || t == Material.MOSS_BLOCK || t == Material.ROOTED_DIRT || t == Material.SHORT_GRASS || t == Material.TALL_GRASS;
         }
@@ -66,7 +66,7 @@ public final class Life {
             for (Block b : new Block[]{head, up2, up1}) {
                 if (Navigator.passable(b)) continue;
                 Material t = b.getType();
-                if (!diggable(t)) { turn(); return Status.RUNNING; }
+                if (!diggable(t) || HumansPlugin.get().zones().isProtected(b, h)) { turn(); return Status.RUNNING; }
                 breaker = new Tasks.Breaker(); breaker.target = b;
                 return Status.RUNNING;
             }

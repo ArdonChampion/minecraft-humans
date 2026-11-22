@@ -76,9 +76,10 @@ public final class OptionGenerator {
         boolean committed = h.commitUntil > m.now();
         if (h.task != null) {
             Task cur = h.task;
+            String what = cur instanceof dev.timur.humans.plan.PlanTask pt ? "working on your goal \"" + pt.goal().title + "\" (now: " + cur.label() + ")" : cur.label();
             out.add(committed
-                ? new Option("keep", "Keep " + cur.label() + " - " + h.commitWho + " asked you to and you agreed", () -> cur, 1.4)
-                : new Option("keep", "Keep " + cur.label(), () -> cur, 0.75 + p.diligence() * 0.2));
+                ? new Option("keep", "Keep " + what + " - " + h.commitWho + " asked you to and you agreed", () -> cur, 1.4)
+                : new Option("keep", "Keep " + what, () -> cur, 0.75 + p.diligence() * 0.2 + (cur instanceof dev.timur.humans.plan.PlanTask ? 0.35 : 0)));
         }
 
         // ---------- entities around
@@ -89,7 +90,7 @@ public final class OptionGenerator {
             if (e instanceof Player pl && pl.getGameMode() != GameMode.SPECTATOR) players.add(pl);
             else if (e instanceof Monster mo && !mo.isDead()) hostiles.add(mo);
             else if (m.byEntity(e) != null && m.byEntity(e) != h && m.byEntity(e).valid()) others.add(m.byEntity(e));
-            else if (e instanceof Animals a && FOOD_ANIMALS.contains(a.getType()) && a.isAdult()) { animals.add(a); pets.add(a); }
+            else if (e instanceof Animals a && FOOD_ANIMALS.contains(a.getType()) && a.isAdult()) { if (!HumansPlugin.get().zones().isProtected(a.getLocation(), h)) animals.add(a); pets.add(a); }
             else if (e instanceof Animals a) pets.add(a);
             else if (e instanceof Item it && it.getLocation().distanceSquared(loc) < 100 && it.getPickupDelay() < 20 && !h.badItems.contains(it.getUniqueId()) && m.mayPickUp(h, it)) items++;
         }
@@ -222,7 +223,7 @@ public final class OptionGenerator {
             out.add(new Option("make_planks", "Turn " + n + " logs into " + n * 4 + " planks for building your house", () -> new Tasks.Craft(pl, n * 4 + " planks"), 0.15 + p.diligence() * 0.2));
         }
         boolean hasFuel = h.inv.has(Material.COAL, 1) || h.inv.countWhere(Tag.LOGS::isTagged) > 0 || h.inv.countWhere(Tag.PLANKS::isTagged) > 1;
-        int smeltable = h.inv.countWhere(x -> Items.cooked(x) != null);
+        int smeltable = h.inv.countWhere(x -> Items.cooked(x) != null && x != Material.COBBLESTONE && x != Material.SAND && x != Material.RED_SAND);
         if (h.inv.has(Material.FURNACE, 1) && hasFuel && smeltable > 0)
             out.add(new Option("smelt", "Use your furnace to cook/smelt " + smeltable + " items (raw food, raw iron...)", Tasks.Smelt::new,
                 0.45 + (h.inv.countWhere(Items::isRawMeat) > 0 && h.hunger < 12 ? 0.3 : 0)));
@@ -306,6 +307,38 @@ public final class OptionGenerator {
             break;
         }
 
+        // ---------- bigger plans (the planner AI works out the steps)
+        if (h.goal != null && !h.goal.done && !(h.task instanceof dev.timur.humans.plan.PlanTask)) {
+            var gl = h.goal;
+            out.add(new Option("resume_goal", "Get back to your goal: " + gl.title + (gl.from != null ? " (" + gl.from + " asked you)" : ""),
+                () -> new dev.timur.humans.plan.PlanTask(gl), gl.from != null ? 1.1 : 0.6));
+        } else if (h.goal == null && !h.isChild() && m.now() - h.lastSelfPlanTick > 20 * 60 * 4 && HumansPlugin.get().text().ready()) {
+            String pr = h.project == null ? "something useful or fun you'd enjoy" : projectDesc(h.project);
+            out.add(new Option("make_plan", "Think up a bigger plan of your own (" + pr + ") and work through it step by step",
+                () -> {
+                    h.lastSelfPlanTick = m.now();
+                    h.goal = new dev.timur.humans.plan.Goal("Pick a concrete, achievable goal for the next few minutes that fits your project (" + pr
+                        + ") and your situation, then do it. Ideas: a better house, a farm, an animal pen, tools or armour, a village with the others, mining iron, a decoration.", null, null, "", m.now());
+                    return new dev.timur.humans.plan.PlanTask(h.goal);
+                }, 0.32 + p.diligence() * 0.15 + (h.project != null ? 0.08 : 0)));
+        }
+        if (h.underground && !(h.task instanceof dev.timur.humans.tasks.Work.StripMine) && !(h.task instanceof dev.timur.humans.plan.PlanTask))
+            out.add(new Option("go_outside", "You're underground in a cave: head back outside", dev.timur.humans.tasks.Work.GoOutside::new, 0.7, true));
+        if (h.inv.countWhere(x -> x.name().endsWith("_BED")) > 0 && !dev.timur.humans.tasks.Work.bedOk(h))
+            out.add(new Option("place_bed", "Set up the bed you're carrying (in your house if you have one)", dev.timur.humans.tasks.Work.PlaceBed::new, 0.45));
+        if (!h.isChild()) for (Human o : others) {
+            if (dev.timur.humans.tasks.Family.cantHaveBaby(h, o, m) != null) continue;
+            out.add(new Option("baby_" + o.name.toLowerCase(Locale.ROOT), "Start a family: have a baby with " + o.name + " (you're both fed and have " +
+                (dev.timur.humans.tasks.Family.foodItems(h) + dev.timur.humans.tasks.Family.foodItems(o)) + " food items to share)",
+                () -> new dev.timur.humans.tasks.Family.HaveBaby(o), 0.12 + p.friendliness() * 0.12));
+            break;
+        }
+        if (h.isChild() && !h.parents.isEmpty()) {
+            Human parent = m.byName(h.parents.get(m.rnd().nextInt(h.parents.size())));
+            if (parent != null && parent.valid() && parent.loc().getWorld() == w && parent.loc().distance(loc) < 48)
+                out.add(new Option("visit_parent", "Go hang out with your parent " + parent.name, () -> new Life.Visit(parent), 0.35));
+        }
+
         // ---------- projects
         if (h.project == null || m.now() - h.projectSince > 20 * 60 * 20) {
             List<String[]> pool = new ArrayList<>(Arrays.asList(PROJECTS));
@@ -326,6 +359,8 @@ public final class OptionGenerator {
         out.add(new Option("rest", players.isEmpty() ? "Take a short break and look around" : "Take a short break and hang out with the people nearby",
             () -> new Tasks.Idle(20 * 10, "taking a break"), 0.08 + (players.isEmpty() ? 0 : p.chattiness() * 0.1) + (1 - h.energy / 20) * 0.6));
 
+        // children play, they don't work
+        if (h.isChild()) out.removeIf(o -> Set.of("mine", "chop", "build", "make", "craft", "fight", "hunt", "explore", "project", "farm", "smelt", "feed", "baby", "gift", "help").contains(o.family()));
         // trapped: only things that make sense from inside a hole
         if (h.trapped) out.removeIf(o -> !Set.of("escape", "eat", "rest", "fight", "flee", "extinguish").contains(o.family()) && !o.id().equals("keep") && !o.id().equals("nap"));
         out.removeIf(o -> { Long f = h.failedOptions.get(o.id()); return f != null && m.now() - f < 20 * 45 && !o.id().equals("keep"); });
@@ -415,6 +450,8 @@ public final class OptionGenerator {
         World w = loc.getWorld();
         int bx = loc.getBlockX(), by = loc.getBlockY(), bz = loc.getBlockZ();
         int r = 18;
+        var zones = HumansPlugin.get().zones();
+        boolean colProtected = false;
         for (int dx = -r; dx <= r; dx++)
             for (int dz = -r; dz <= r; dz++) {
                 int x = bx + dx, z = bz + dz;
@@ -425,6 +462,8 @@ public final class OptionGenerator {
                     Block b = w.getBlockAt(x, by + dy, z);
                     Material t = b.getType();
                     if (t.isAir()) continue;
+                    if ((dy & 3) == 0 && (dx & 3) == 0 && (dz & 3) == 0) colProtected = zones.isProtected(b, h);
+                    if (colProtected && !t.name().endsWith("_ORE")) continue; // players' base: hands off
                     double d = Math.sqrt(hd2 + dy * dy);
                     if (Life.PickPlants.isPickable(t)) { if (d <= 12 && s.flowers.size() < 8 && !h.isBad(b, m.now())) s.flowers.add(b); continue; }
                     if (Life.matureCrop(b)) { if (d <= 16 && s.crops.size() < 24) s.crops.add(b); continue; }
@@ -462,7 +501,7 @@ public final class OptionGenerator {
         return false;
     }
 
-    static List<Block> treeLogs(Block base) {
+    public static List<Block> treeLogs(Block base) {
         List<Block> out = new ArrayList<>(); Deque<Block> q = new ArrayDeque<>(); Set<Block> seen = new HashSet<>();
         q.add(base); seen.add(base);
         while (!q.isEmpty() && out.size() < 40) {
@@ -476,7 +515,7 @@ public final class OptionGenerator {
         return out;
     }
 
-    static List<Block> vein(Block start, int max) {
+    public static List<Block> vein(Block start, int max) {
         List<Block> out = new ArrayList<>(); Deque<Block> q = new ArrayDeque<>(); Set<Block> seen = new HashSet<>();
         Material t = start.getType();
         q.add(start); seen.add(start);
@@ -573,6 +612,24 @@ public final class OptionGenerator {
                 else cant = "Nothing's ripe around here.";
             }
             case "request_explore" -> { make = () -> new Tasks.Explore("something interesting"); what = "go exploring"; }
+            case "request_go_outside" -> {
+                if (dev.timur.humans.tasks.Work.GoOutside.outsideNow(h)) cant = "I'm already outside!";
+                else { make = dev.timur.humans.tasks.Work.GoOutside::new; what = "go outside"; }
+            }
+            case "request_place_bed" -> {
+                if (h.inv.countWhere(x -> x.name().endsWith("_BED")) == 0) cant = "I don't have a bed - give me one?";
+                else { make = dev.timur.humans.tasks.Work.PlaceBed::new; what = "set up the bed"; }
+            }
+            case "request_baby" -> {
+                Human best = null; String why = "there's nobody here to start a family with";
+                for (Human o : m.all()) {
+                    if (o == h || !o.valid()) continue;
+                    String w = dev.timur.humans.tasks.Family.cantHaveBaby(h, o, m);
+                    if (w == null) { best = o; break; } else if (o.loc().getWorld() == loc.getWorld() && o.loc().distance(loc) < 32) why = w;
+                }
+                if (best != null) { Human b = best; make = () -> new dev.timur.humans.tasks.Family.HaveBaby(b); what = "start a family with " + b.name; }
+                else cant = "Hmm, not now - " + why + ".";
+            }
             default -> cant = null;
         }
         if (make == null) return new Request(null, cant);

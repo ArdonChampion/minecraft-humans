@@ -216,7 +216,7 @@ public final class Tasks {
             if (pause > 0) { pause--; return Status.RUNNING; }
             if (collect != null) {
                 Status cs = collect.tick(h, m);
-                return cs == Status.RUNNING && collect.age() < 120 ? Status.RUNNING : Status.SUCCESS;
+                return cs == Status.RUNNING && collect.age() < 20 * 15 ? Status.RUNNING : Status.SUCCESS;
             }
             if (breaker != null) {
                 if (breaker.target.getType().isAir()) { breaker = null; return Status.RUNNING; }
@@ -262,11 +262,11 @@ public final class Tasks {
         private final Set<UUID> unreachable = new HashSet<>();
         private UUID current; private int startCount = -1;
         public String label() { return "picking up items"; }
-        public int maxTicks() { return 20 * 20; }
+        public int maxTicks() { return 20 * 30; }
         protected Status run(Human h, HumanManager m) {
             if (startCount < 0) startCount = h.inv.view().values().stream().mapToInt(Integer::intValue).sum();
             Item nearest = null; double best = 1e9;
-            for (Entity e : h.entity.getNearbyEntities(10, 4, 10))
+            for (Entity e : h.entity.getNearbyEntities(14, 10, 14))
                 if (e instanceof Item it && it.getPickupDelay() < 20 && !unreachable.contains(it.getUniqueId()) && !h.badItems.contains(it.getUniqueId()) && m.mayPickUp(h, it)) {
                     double d = it.getLocation().distanceSquared(h.loc()); if (d < best) { best = d; nearest = it; }
                 }
@@ -366,7 +366,7 @@ public final class Tasks {
             }
             if (!night) { outcome = lying ? "slept well and woke up" : "it wasn't night anymore"; return Status.SUCCESS; }
             if (!lying) {
-                Location bed = h.hutBuilt && h.hutCenter != null ? h.hutCenter : h.home;
+                Location bed = Work.bedOk(h) ? h.bed.clone().add(0.5, 0, 0.5) : h.hutBuilt && h.hutCenter != null ? h.hutCenter : h.home;
                 if (bed != null && bed.getWorld() == h.loc().getWorld() && bed.distance(h.loc()) > 2) {
                     if (go == null) go = new Goto(bed, 1.0, false, "going to bed");
                     Status s = go.tick(h, m);
@@ -374,6 +374,7 @@ public final class Tasks {
                 }
                 lying = true;
                 h.sleeping = true;
+                if (Work.bedOk(h) && h.bed.distance(h.loc()) < 3) h.entity.teleport(h.bed.clone().add(0.5, 0.56, 0.5));
                 h.entity.setPose(Pose.SLEEPING, true);
                 Act.hold(h, Material.AIR);
             }
@@ -456,7 +457,8 @@ public final class Tasks {
             Act.lookAt(h, f.getLocation().add(0.5, 0.5, 0.5));
             if (age % 10 == 0) f.getWorld().spawnParticle(Particle.SMOKE, f.getLocation().add(0.5, 1.1, 0.5), 3, 0.15, 0.05, 0.15, 0.01);
             if (age % 50 == 0) {
-                Material raw = h.inv.view().keySet().stream().filter(x -> Items.cooked(x) != null).findFirst().orElse(null);
+                Material raw = h.inv.view().keySet().stream().filter(x -> Items.cooked(x) != null)
+                    .min(Comparator.comparingInt(x -> x == Material.COBBLESTONE || x == Material.SAND || x == Material.RED_SAND ? 1 : 0)).orElse(null);
                 if (raw == null || done >= max) { outcome = done == 0 ? "had nothing to smelt" : "smelted/cooked " + done + " items"; return done == 0 ? Status.FAIL : Status.SUCCESS; }
                 if (done % 8 == 0) { // fuel per 8 items
                     if (h.inv.remove(Material.COAL, 1) || h.inv.remove(Material.CHARCOAL, 1) || h.inv.removeAny(Tag.LOGS::isTagged, 1) || h.inv.removeAny(Tag.PLANKS::isTagged, 2)) {}
