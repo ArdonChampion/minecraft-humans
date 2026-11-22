@@ -27,6 +27,11 @@ family:
   grow_up_minutes: 20
   max_humans: 16
 
+# Debug event log (plugins/Humans/logs/humans-YYYY-MM-DD.jsonl): decisions, chat, plans, tasks, AI calls, errors
+logs:
+  enabled: true
+  keep_days: 14
+
 zones:
   # Humans won't break/build/pick up within this many blocks of players' chests, beds, furnaces, signs...
   auto_radius: 9

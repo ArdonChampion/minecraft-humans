@@ -110,6 +110,8 @@ public final class Brain {
         final String inputStr = input.toString();
         plugin.gemini().decide(inputStr, questions).whenComplete((res, err) -> Bukkit.getScheduler().runTask(plugin, () -> {
             inFlight = false;
+            HumanLog.log(err != null ? "ai_error" : "ai_call", null, "api", "decision", "humans", options.size(), "ms", System.currentTimeMillis() - nowMs,
+                "tokens", err == null ? res.tokens() : null, "error", err == null ? null : String.valueOf(err.getMessage()));
             if (err != null) {
                 consecutiveErrors++;
                 if (System.currentTimeMillis() - lastErrorLog > 30_000) { plugin.getLogger().log(Level.WARNING, "Gemini Decision call failed: " + err.getMessage()); lastErrorLog = System.currentTimeMillis(); }
@@ -145,7 +147,9 @@ public final class Brain {
             if (t != null && t.has("noul") && t.get("noul").getAsDouble() > 0.6) talk = true;
             if (plugin.debug() && act != null) plugin.getLogger().info("[debug] " + h.name + " -> " + act.get("choice") + " (conf " + String.format("%.2f", conf(act)) + ")");
         }
+        boolean fromAi = chosen != null;
         if (chosen == null) { chosen = offlinePick(h, opts, m); fallbackDecisions++; } else aiDecisions++;
+        logDecision(h, opts, chosen, fromAi ? "ai" : answers == null ? "offline" : "ai-invalid-choice", answers, q);
         m.startTask(h, chosen);
         if (chosen.say() != null && chosen.say().startsWith("!")) {
             if (m.nearestPlayer(h, 24) != null) plugin.chat().broadcast(h, chosen.say().substring(1));
@@ -159,7 +163,32 @@ public final class Brain {
         h.lastThinkTick = m.now();
         List<Option> opts = OptionGenerator.generate(h, m);
         fallbackDecisions++;
-        m.startTask(h, offlinePick(h, opts, m));
+        Option o = offlinePick(h, opts, m);
+        logDecision(h, opts, o, "offline", null, null);
+        m.startTask(h, o);
+    }
+
+    /** Log what the human could do, what it picked and why (for debugging weird behaviour). */
+    static void logDecision(Human h, List<Option> opts, Option chosen, String src, JsonObject answers, String q) {
+        if (!HumanLog.on() || chosen == null) return;
+        JsonObject ev = HumanLog.ev("decide", h);
+        ev.addProperty("src", src);
+        ev.addProperty("chose", chosen.id());
+        ev.addProperty("text", chosen.text());
+        if (answers != null && q != null) {
+            JsonObject act = obj(answers, q + "_act"); if (act != null) ev.addProperty("conf", conf(act));
+            JsonObject md = obj(answers, q + "_mood"); if (md != null && md.has("choice")) ev.addProperty("mood", md.get("choice").getAsString());
+            JsonObject t = obj(answers, q + "_talk"); if (t != null && t.has("noul")) ev.addProperty("talk", t.get("noul").getAsDouble());
+        }
+        com.google.gson.JsonArray arr = new com.google.gson.JsonArray();
+        for (int i = 0; i < Math.min(12, opts.size()); i++) arr.add(opts.get(i).id() + " " + String.format("%.2f", opts.get(i).score()));
+        ev.add("options", arr);
+        ev.addProperty("n_options", opts.size());
+        ev.addProperty("hunger", Math.round(h.hunger)); ev.addProperty("energy", Math.round(h.energy));
+        if (h.valid()) ev.addProperty("hp", Math.round(h.entity.getHealth()));
+        ev.addProperty("last", h.lastOutcome);
+        if (h.goal != null) ev.addProperty("goal", h.goal.title);
+        HumanLog.log(ev);
     }
 
     /** Utility-based fallback: highest score + a bit of randomness, avoiding what just failed. */

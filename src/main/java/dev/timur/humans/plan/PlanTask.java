@@ -33,7 +33,7 @@ public final class PlanTask extends Task {
     @Override public String debugInfo() { return "goal=" + g.title + " round=" + g.rounds + " step=" + g.stepIdx + "/" + g.steps.size() + (cur != null ? " cur=" + cur.label() : ""); }
 
     protected Status run(Human h, HumanManager m) {
-        if (g.done) { outcome = "finished: " + g.title; return Status.SUCCESS; }
+        if (g.done) { outcome = "finished: " + g.title; HumanLog.log("goal_end", h, "goal", g.title, "result", "done", "rounds", g.rounds, "from", g.from); return Status.SUCCESS; }
         if (waiting) {
             if (++waitTicks > 20 * 90) { waiting = false; g.note("(planning took too long)"); if (++g.rounds > 12) return giveUp(h); }
             if (age % 20 == 0) { Player p = m.nearestPlayer(h, 8); if (p != null) Act.lookAt(h, p.getEyeLocation()); }
@@ -45,6 +45,7 @@ public final class PlanTask extends Task {
             cur.stop(h);
             Goal.Step st = g.steps.get(g.stepIdx);
             g.note((s == Status.SUCCESS ? "OK " : "FAILED ") + st.describe() + " -> " + cur.outcome());
+            HumanLog.log("plan_step", h, "goal", g.title, "round", g.rounds, "step", st.describe(), "status", s.name(), "outcome", cur.outcome(), "secs", cur.age() / 20);
             cur = null;
             g.stepIdx++;
             if (s == Status.FAIL) { g.stepIdx = g.steps.size(); nextPlanTick = m.now() + 60; }
@@ -55,7 +56,8 @@ public final class PlanTask extends Task {
             Skills.Start r;
             try { r = Skills.start(h, m, g, st); } catch (Exception e) { r = new Skills.Start(null, null, "error: " + e.getMessage()); }
             if (r.task() != null) { cur = r.task(); return Status.RUNNING; }
-            if (r.error() != null) { g.note("FAILED " + st.describe() + " -> " + r.error()); g.stepIdx = g.steps.size(); nextPlanTick = m.now() + 60; return Status.RUNNING; }
+            if (r.error() != null) { HumanLog.log("plan_step", h, "goal", g.title, "round", g.rounds, "step", st.describe(), "status", "REJECTED", "outcome", r.error());
+                g.note("FAILED " + st.describe() + " -> " + r.error()); g.stepIdx = g.steps.size(); nextPlanTick = m.now() + 60; return Status.RUNNING; }
             g.note("OK " + st.describe() + (r.done() == null ? "" : " -> " + r.done()));
             g.stepIdx++;
             return Status.RUNNING;
@@ -67,6 +69,7 @@ public final class PlanTask extends Task {
     }
 
     private Status giveUp(Human h) {
+        HumanLog.log("goal_end", h, "goal", g.title, "result", "gave_up", "rounds", g.rounds, "log", String.join(" || ", g.log));
         g.done = true;
         outcome = "gave up on: " + g.title + " (too many attempts)";
         h.remember("I gave up on \"" + g.title + "\"");
@@ -78,7 +81,19 @@ public final class PlanTask extends Task {
         if (!HumansPlugin.get().text().ready()) { g.done = true; outcome = "can't plan without the text AI"; return; }
         waiting = true; waitTicks = 0;
         HumansPlugin plugin = HumansPlugin.get();
+        long t0 = System.currentTimeMillis();
         Planner.plan(h, m, g).whenComplete((res, err) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            if (HumanLog.on()) {
+                com.google.gson.JsonObject ev = HumanLog.ev("plan", h);
+                HumanLog.put(ev, "goal_text", g.text); HumanLog.put(ev, "from", g.from); HumanLog.put(ev, "round", g.rounds + 1); HumanLog.put(ev, "ms", System.currentTimeMillis() - t0);
+                if (err != null || res == null) HumanLog.put(ev, "error", err == null ? "no answer" : String.valueOf(err.getMessage()));
+                else {
+                    HumanLog.put(ev, "title", res.title()); HumanLog.put(ev, "thought", res.thought()); HumanLog.put(ev, "say", res.say()); HumanLog.put(ev, "done", res.done());
+                    com.google.gson.JsonArray st = new com.google.gson.JsonArray(); for (Goal.Step x : res.steps()) st.add(x.describe()); ev.add("steps", st);
+                }
+                HumanLog.put(ev, "history", String.join(" || ", g.log));
+                HumanLog.log(ev);
+            }
             waiting = false;
             g.rounds++;
             if (err != null || res == null) {

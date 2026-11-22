@@ -101,7 +101,7 @@ public final class ChatBrain implements Listener {
             }
             if (best != null) targets.add(best);
         }
-        for (Human h : targets.subList(0, Math.min(everyone ? 6 : 2, targets.size()))) respond(h, p, text, named);
+        for (Human h : targets.subList(0, Math.min(named || everyone ? 6 : 1, targets.size()))) respond(h, p, text, named);
     }
 
     private static JsonObject choiceQ(String instructions, String[] pairs) {
@@ -145,7 +145,10 @@ public final class ChatBrain implements Listener {
             if (err != null || !h.valid()) { if (err != null && h.valid()) offlineReply(h, p, text); return; }
             plugin.budget().recordDecision(res.tokens());
             JsonObject a = res.answers();
-            if (!named && a.has("addressed") && a.getAsJsonObject("addressed").get("noul").getAsDouble() < 0.45) return;
+            if (!named && a.has("addressed") && a.getAsJsonObject("addressed").get("noul").getAsDouble() < 0.45) {
+                HumanLog.log("chat_ignored", h, "player", p.getName(), "text", text, "addressed", a.getAsJsonObject("addressed").get("noul").getAsDouble());
+                return;
+            }
             String it = a.has("intent") ? a.getAsJsonObject("intent").get("choice").getAsString() : "smalltalk";
             String kind = a.has("reply") ? a.getAsJsonObject("reply").get("choice").getAsString() : "talk";
             double idx = a.has("trust") ? a.getAsJsonObject("trust").get("score").getAsDouble() : 2;
@@ -154,6 +157,8 @@ public final class ChatBrain implements Listener {
             if (face != Expression.NEUTRAL) h.express(face, 80, plugin, m.now());
             if (it.equals("insult")) h.remember(p.getName() + " insulted me: \"" + trim(text, 60) + "\"");
             if (it.equals("compliment") || it.equals("apology")) h.remember(p.getName() + " was nice to me (" + it + ")");
+            HumanLog.log("chat_in", h, "player", p.getName(), "text", text, "named", named, "intent", it, "reply_kind", kind,
+                "trust_score", idx, "trust_now", h.trustOf(p.getUniqueId()), "face", face.id());
             if (plugin.debug()) plugin.getLogger().info("[debug] chat " + p.getName() + "->" + h.name + ": intent=" + it + " reply=" + kind + " trust=" + String.format("%.2f", idx) + " face=" + face);
 
             if (it.equals("request_goal") || it.equals("request_other")) { handleGoal(h, p, text, groupOf(h, p, text)); return; }
@@ -190,6 +195,7 @@ public final class ChatBrain implements Listener {
             if (!yes) { say(h, Lines.pick(Lines.REFUSE, h, p.getName(), null)); h.remember("refused " + p.getName() + "'s request: " + trim(text, 60)); return; }
             say(h, Lines.pick(Lines.AGREE, h, p.getName(), null));
             dev.timur.humans.plan.Goal g = new dev.timur.humans.plan.Goal(p.getName() + " said: \"" + trim(text, 200) + "\"", p.getName(), p.getUniqueId(), group, m.now());
+            HumanLog.log("goal_new", h, "from", p.getName(), "text", text, "group", group);
             h.goal = g;
             m.startTask(h, new Option("do_request", "work on " + p.getName() + "'s request", () -> new dev.timur.humans.plan.PlanTask(g), 1));
             h.commitUntil = m.now() + 20L * 60 * 15;
@@ -210,6 +216,7 @@ public final class ChatBrain implements Listener {
     public void handleRequest(Human h, Player p, String intent) {
         HumanManager m = plugin.manager();
         OptionGenerator.Request r = OptionGenerator.request(h, m, p, intent);
+        if (r.option() == null) HumanLog.log("request", h, "player", p.getName(), "intent", intent, "result", "cant", "reason", r.cant());
         int delay = 6 + m.rnd().nextInt(14);
         if (r.option() == null) {
             String why = r.cant() != null ? r.cant() : Lines.pick(Lines.CANT, h, p.getName(), null);
@@ -217,6 +224,7 @@ public final class ChatBrain implements Listener {
             return;
         }
         boolean yes = m.rnd().nextDouble() < acceptChance(h, p, intent);
+        HumanLog.log("request", h, "player", p.getName(), "intent", intent, "result", yes ? "accepted" : "refused", "trust", h.trustOf(p.getUniqueId()));
         later(delay, () -> {
             if (!h.valid()) return;
             if (yes) {
@@ -358,6 +366,7 @@ public final class ChatBrain implements Listener {
     }
 
     public void broadcast(Human h, String line) {
+        HumanLog.log("say", h, "line", line, "task", h.task == null ? null : h.task.label());
         Component msg = Component.text("<", NamedTextColor.GRAY).append(Component.text(h.name, NamedTextColor.GOLD)).append(Component.text("> ", NamedTextColor.GRAY)).append(Component.text(line, NamedTextColor.WHITE));
         for (Player p : h.entity.getWorld().getPlayers()) if (p.getLocation().distance(h.loc()) < 40) p.sendMessage(msg);
         h.say(line, plugin.manager().now());

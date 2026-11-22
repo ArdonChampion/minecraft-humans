@@ -16,6 +16,7 @@ public final class HumansPlugin extends JavaPlugin {
     private TextClient text;
     private Zones zones;
     private AdminAccess admins;
+    private HumanLog humanLog;
     private Budget budget;
     private Brain brain;
     private ChatBrain chat;
@@ -40,6 +41,8 @@ public final class HumansPlugin extends JavaPlugin {
         instance = this;
         saveDefaultConfig();
         System.setProperty("java.awt.headless", "true");
+        humanLog = new HumanLog(this);
+        HumanLog.log("server_start", null, "version", getPluginMeta().getVersion());
         budget = new Budget(this);
         gemini = new GeminiClient(this);
         text = new TextClient(this);
@@ -75,5 +78,7 @@ public final class HumansPlugin extends JavaPlugin {
         if (budget != null) budget.save();
         if (zones != null) zones.save();
         if (pack != null) pack.stop();
+        HumanLog.log("server_stop", null);
+        if (humanLog != null) humanLog.close();
     }
 }

@@ -117,6 +117,7 @@ public final class HumanManager {
         humans.put(c.id, c);
         spawnBody(c, at);
         save(c);
+        HumanLog.log("birth", c, "parents", a.name + " + " + b.name);
         Component msg = Component.text("♥ " + a.name + " and " + b.name + " had a baby: " + c.name + "!", NamedTextColor.LIGHT_PURPLE);
         for (Player pl : at.getWorld().getPlayers()) if (pl.getLocation().distance(at) < 64) pl.sendMessage(msg);
         at.getWorld().spawnParticle(Particle.HEART, at.clone().add(0, 1, 0), 8, 0.5, 0.5, 0.5);
@@ -221,6 +222,7 @@ public final class HumanManager {
             try { tickHuman(h); }
             catch (Exception ex) {
                 plugin.getLogger().warning("Error ticking " + h.name + ": " + ex);
+                HumanLog.error("tick" + (h.task == null ? "" : " during " + h.task.getClass().getSimpleName()), h, ex);
                 if (plugin.debug()) ex.printStackTrace();
                 if (h.task != null) { try { h.task.stop(h); } catch (Exception ignored) {} h.task = null; }
                 h.needsThink = true;
@@ -284,6 +286,16 @@ public final class HumanManager {
             if (now % 10 == 0) { Player p = nearestPlayer(h, 6); if (p != null) Act.lookAt(h, p.getEyeLocation()); }
         }
         if (now % 10 == 0) h.setStatus(statusLine(h));
+        if ((now + (h.id.hashCode() & 1023)) % 1200 == 0 && HumanLog.on()) { // a status snapshot every minute
+            com.google.gson.JsonObject st = HumanLog.ev("status", h);
+            HumanLog.put(st, "task", h.task == null ? null : h.task.label());
+            HumanLog.put(st, "task_debug", h.task == null ? null : h.task.debugInfo());
+            HumanLog.put(st, "hp", Math.round(h.entity.getHealth())); HumanLog.put(st, "hunger", Math.round(h.hunger)); HumanLog.put(st, "energy", Math.round(h.energy));
+            HumanLog.put(st, "mood", h.mood.id()); HumanLog.put(st, "nav", h.nav.active()); HumanLog.put(st, "trapped", h.trapped); HumanLog.put(st, "underground", h.underground);
+            HumanLog.put(st, "goal", h.goal == null ? null : h.goal.title); HumanLog.put(st, "inv", h.inv.describe());
+            HumanLog.put(st, "committed_to", h.commitUntil > now ? h.commitWho : null); HumanLog.put(st, "child", h.isChild());
+            HumanLog.log(st);
+        }
         if (plugin.debug() && now % 200 == 0 && h.task != null) {
             Location l = h.loc();
             plugin.getLogger().info("[debug] " + h.name + " @" + l.getBlockX() + "," + l.getBlockY() + "," + l.getBlockZ() + " " + h.task.label() + " " + h.task.debugInfo() + " nav=" + h.nav.active());
@@ -304,6 +316,7 @@ public final class HumanManager {
     }
 
     public void startTask(Human h, Option o) {
+        HumanLog.log("task_start", h, "option", o.id(), "text", o.text());
         Task t;
         try { t = o.make().get(); } catch (Exception e) { t = new Tasks.Idle(40, "confused"); }
         if (t != h.task) {
@@ -326,6 +339,8 @@ public final class HumanManager {
 
     private void finishTask(Human h, Task t, Task.Status s) {
         t.stop(h);
+        HumanLog.log("task_end", h, "option", h.lastOptionId, "task", t.getClass().getSimpleName(), "label", t.label(), "status", s.name(),
+            "outcome", t.outcome(), "secs", t.age() / 20, "debug", t.debugInfo().isEmpty() ? null : t.debugInfo());
         if (t instanceof dev.timur.humans.plan.PlanTask pt && (pt.goal().done || s == Task.Status.FAIL) && h.goal == pt.goal()) {
             h.goal = null;
             if (s == Task.Status.SUCCESS) { h.remember("I finished: " + pt.goal().title); h.express(Expression.HAPPY, 60, plugin, now); }
@@ -385,11 +400,13 @@ public final class HumanManager {
         h.entity.getWorld().spawnParticle(Particle.CLOUD, h.loc().add(0, 1, 0), 12, 0.3, 0.5, 0.3, 0.02);
         h.entity.teleport(land);
         h.event("got stuck and climbed out");
+        HumanLog.log("unstuck_teleport", h, "to", land.getBlockX() + "," + land.getBlockY() + "," + land.getBlockZ());
         if (plugin.debug()) plugin.getLogger().info("[debug] " + h.name + " was stuck -> moved to " + land.getBlockX() + "," + land.getBlockY() + "," + land.getBlockZ());
     }
 
     /** Interrupt: something happened that deserves a new decision right away. */
     public void interrupt(Human h, String what) {
+        HumanLog.log("interrupt", h, "what", what, "task", h.task == null ? null : h.task.label());
         h.event(what);
         h.thinkNotBefore = 0;
         h.needsThink = true;
@@ -536,6 +553,7 @@ public final class HumanManager {
     }
 
     public void onDeath(Human h, Entity killer, List<ItemStack> drops) {
+        HumanLog.log("death", h, "killer", killer == null ? null : nameOf(killer), "task", h.task == null ? null : h.task.label(), "inv", h.inv.describe());
         drops.clear();
         Location at = h.loc();
         for (var e : h.inv.view().entrySet()) {

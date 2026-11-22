@@ -79,6 +79,7 @@ public final class TextClient {
             .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
             .build();
         CompletableFuture<String> out = new CompletableFuture<>();
+        long t0 = System.currentTimeMillis();
         CompletableFuture.runAsync(() -> {
             boolean got = false;
             try {
@@ -94,9 +95,12 @@ public final class TextClient {
                 JsonObject msg = j.getAsJsonArray("choices").get(0).getAsJsonObject().getAsJsonObject("message");
                 String content = msg.has("content") && !msg.get("content").isJsonNull() ? msg.get("content").getAsString() : "";
                 if (content.isBlank()) throw new RuntimeException("empty reply (reasoning used up max_tokens?)");
+                dev.timur.humans.HumanLog.log("ai_call", null, "api", "text", "ms", System.currentTimeMillis() - t0, "max_tokens", maxTokens,
+                    "usage", j.has("usage") ? j.get("usage").toString() : null, "chars", content.length());
                 out.complete(content);
             } catch (Exception e) {
                 failures++;
+                dev.timur.humans.HumanLog.log("ai_error", null, "api", "text", "ms", System.currentTimeMillis() - t0, "error", String.valueOf(e.getMessage()), "fallback", "gemini");
                 if (e instanceof java.net.http.HttpTimeoutException) downUntilMs = System.currentTimeMillis() + 20_000;
                 if (plugin.debug()) plugin.getLogger().info("[debug] text AI failed (" + e.getMessage() + "), falling back to Gemini");
                 fallback(system, user, fallbackTokens).whenComplete((v, e2) -> { if (e2 != null) out.completeExceptionally(e2); else out.complete(v); });
