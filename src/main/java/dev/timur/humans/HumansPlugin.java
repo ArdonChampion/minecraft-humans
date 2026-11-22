@@ -15,6 +15,7 @@ public final class HumansPlugin extends JavaPlugin {
     private GeminiClient gemini;
     private TextClient text;
     private Zones zones;
+    private AdminAccess admins;
     private Budget budget;
     private Brain brain;
     private ChatBrain chat;
@@ -26,6 +27,7 @@ public final class HumansPlugin extends JavaPlugin {
     public GeminiClient gemini() { return gemini; }
     public TextClient text() { return text; }
     public Zones zones() { return zones; }
+    public AdminAccess admins() { return admins; }
     public Budget budget() { return budget; }
     public Brain brain() { return brain; }
     public ChatBrain chat() { return chat; }
@@ -51,6 +53,9 @@ public final class HumansPlugin extends JavaPlugin {
         pm.registerEvents(new HumanListener(this), this);
         pm.registerEvents(chat, this);
         pm.registerEvents(pack, this);
+        admins = new AdminAccess(this);
+        pm.registerEvents(admins, this);
+        admins.applyOnline();
         var cmd = getCommand("humans");
         HumansCommand hc = new HumansCommand(this);
         cmd.setExecutor(hc); cmd.setTabCompleter(hc);

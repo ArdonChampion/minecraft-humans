@@ -72,8 +72,23 @@ public final class HumansCommand implements TabExecutor {
             }
             case "tp" -> {
                 if (!(s instanceof Player p)) return true;
-                Human h = find(s, a); if (h == null || !h.valid()) return true;
-                p.teleport(h.loc());
+                Human h = find(s, a); if (h == null) return true;
+                if (h.valid()) p.teleport(h.loc());
+                else if (h.home != null) { p.teleport(h.home); msg(s, h.name + " isn't loaded right now - took you to their home."); }
+            }
+            case "bring", "summon" -> { // /humans bring <name> : teleport a human to you
+                if (!(s instanceof Player p)) return true;
+                Human h = find(s, a); if (h == null) return true;
+                if (!h.valid()) { msg(s, h.name + " isn't loaded (go near their home first: /humans tp " + h.name + ")."); return true; }
+                if (h.task != null) { h.task.stop(h); h.task = null; }
+                h.entity.teleport(p.getLocation()); h.needsThink = true;
+                msg(s, "Brought " + h.name + " to you.");
+            }
+            case "kill" -> { // dies like normal (drops items) and comes back home after a while
+                Human h = find(s, a); if (h == null) return true;
+                if (!h.valid()) { msg(s, h.name + " isn't loaded."); return true; }
+                h.entity.setHealth(0);
+                msg(s, "Killed " + h.name + " (they'll respawn at home). Use /humans remove to delete them forever.");
             }
             case "give" -> { // /humans give <name> <material> [n]   (testing)
                 Human h = a.length > 2 ? m.byName(a[1]) : null;
@@ -106,6 +121,22 @@ public final class HumansCommand implements TabExecutor {
                     }
                     msg(s, sb.toString());
                 }
+            }
+            case "admin" -> { // /humans admin add|remove|list <player>  (ops and console only)
+                if (s instanceof Player pl && !pl.isOp()) { msg(s, "Only server operators can change who manages humans."); return true; }
+                String act = a.length > 1 ? a[1].toLowerCase(Locale.ROOT) : "list";
+                if (act.equals("list")) {
+                    List<String> names = new ArrayList<>();
+                    for (UUID u : plugin.admins().admins()) { var op = org.bukkit.Bukkit.getOfflinePlayer(u); names.add(op.getName() == null ? u.toString() : op.getName()); }
+                    msg(s, "Humans managers (non-op): " + (names.isEmpty() ? "none" : String.join(", ", names)));
+                    return true;
+                }
+                if (a.length < 3) { msg(s, "/humans admin add|remove <player>"); return true; }
+                var target = org.bukkit.Bukkit.getOfflinePlayerIfCached(a[2]);
+                if (target == null) { msg(s, "Unknown player " + a[2] + " (they must have joined before)."); return true; }
+                if (act.equals("add")) msg(s, (plugin.admins().add(target) ? "Added " : "Already had: ") + target.getName() + " can now use all /humans commands (not op).");
+                else if (act.equals("remove")) msg(s, (plugin.admins().remove(target) ? "Removed " : "Wasn't on the list: ") + target.getName());
+                else msg(s, "/humans admin add|remove|list <player>");
             }
             case "protect" -> { // /humans protect <radius> [name] - a players' area humans must leave alone
                 if (!(s instanceof Player p)) { msg(s, "Players only."); return true; }
@@ -152,8 +183,9 @@ public final class HumansCommand implements TabExecutor {
             case "reloadkey" -> { plugin.gemini().reloadKey(); msg(s, "Key " + (plugin.gemini().ready() ? "loaded" : "missing")); }
             default -> {
                 msg(s, "/humans spawn [name|count]  - spawn humans where you stand (their home)");
-                msg(s, "/humans list | info <name> | remove <name> | home <name> | tp <name>");
-                msg(s, "/humans think <name> | give <name> <item> [n] | budget | debug | pack | reloadkey");
+                msg(s, "/humans list | info <name> | tp <name> | bring <name> | kill <name> | remove <name> | home <name>");
+                msg(s, "/humans goal <name> <task> | plan <name> | cancel <name> | give <name> <item> [n] | think <name>");
+                msg(s, "/humans protect <radius> | unprotect | zones | budget | text | debug | pack | admin list|add|remove <player>");
                 msg(s, "Talk to humans in chat (say their name), right-click for info, sneak+right-click to gift.");
             }
         }
@@ -176,8 +208,11 @@ public final class HumansCommand implements TabExecutor {
 
     @Override
     public List<String> onTabComplete(CommandSender s, Command c, String l, String[] a) {
-        if (a.length == 1) return filter(List.of("spawn", "list", "info", "remove", "home", "tp", "give", "think", "budget", "debug", "pack", "reloadkey"), a[0]);
-        if (a.length == 2 && !a[0].equalsIgnoreCase("spawn")) {
+        if (a.length == 1) return filter(List.of("spawn", "list", "info", "tp", "bring", "kill", "remove", "home", "goal", "plan", "cancel", "give", "think",
+            "protect", "unprotect", "zones", "budget", "text", "debug", "pack", "admin", "awake", "probe"), a[0]);
+        if (a.length == 2 && a[0].equalsIgnoreCase("admin")) return filter(List.of("list", "add", "remove"), a[1]);
+        if (a.length == 3 && a[0].equalsIgnoreCase("admin")) { List<String> n = new ArrayList<>(); for (Player p : org.bukkit.Bukkit.getOnlinePlayers()) n.add(p.getName()); return filter(n, a[2]); }
+        if (a.length == 2 && !a[0].equalsIgnoreCase("spawn") && !a[0].equalsIgnoreCase("protect")) {
             List<String> names = new ArrayList<>(); for (Human h : plugin.manager().all()) names.add(h.name);
             return filter(names, a[1]);
         }
