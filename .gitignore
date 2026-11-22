@@ -1,0 +1,9 @@
+build/
+.gradle/
+out/
+*.class
+*.jar
+# secrets never go in the repo (the Gemini key lives in a file on the server)
+*.key
+gemini.key
+.env

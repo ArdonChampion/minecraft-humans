@@ -1,0 +1,51 @@
+# Humans - AI humans for Paper 26.3
+gemini:
+  # File containing the Gemini API key (never put the key itself in this config)
+  api_key_file: plugins/Humans/gemini.key
+  decision_model: gemini-decision-1
+  chat_model: gemini-3.5-flash-lite
+
+budget:
+  # Gemini Decision 1 free tier: 200 RPM, 50k TPM, 10k RPD. We stay well under.
+  decisions_per_day: 9000
+  decisions_per_minute: 120
+  decision_tokens_per_minute: 40000
+  # Minimum seconds between two batched decision calls
+  min_seconds_between_calls: 2.0
+  # Flash-Lite (chat lines). Free limits aren't published; keep this conservative.
+  chat_per_day: 400
+  chat_per_minute: 8
+
+brain:
+  # Max humans decided in one batched call
+  max_humans_per_call: 20
+  # Re-think a long-running task after this many seconds
+  rethink_seconds: 30
+  # Humans only act when a player is within this many blocks
+  awake_radius: 96
+  # Gemini decides only for humans within this many blocks of a player;
+  # further away (nobody watching) they use the free offline brain
+  ai_radius: 48
+  # testing only: act even with no players online
+  always_awake: false
+  # Seconds a human waits between spontaneous lines
+  talk_cooldown_seconds: 40
+
+pack:
+  # The plugin hosts its own face-expression resource pack on this port
+  port: 8080
+  public_url: http://YOUR.SERVER.IP:8080/humans-pack.zip   # must be reachable by players
+  required: true
+  prompt: "The AI humans need this tiny pack for their faces & expressions."
+
+# Sound played when a human changes expression (any sound key works)
+expressions:
+  happy:     { sound: entity.vindicator.celebrate, volume: 0.7, pitch: 1.35 }
+  sad:       { sound: entity.wandering_trader.no,  volume: 0.8, pitch: 0.75 }
+  angry:     { sound: entity.vindicator.ambient,   volume: 0.9, pitch: 1.0 }
+  scared:    { sound: entity.pillager.hurt,        volume: 0.8, pitch: 1.5 }
+  surprised: { sound: entity.evoker.ambient,       volume: 0.8, pitch: 1.6 }
+  hurt:      { sound: entity.player.hurt,          volume: 1.0, pitch: 1.0 }
+  sleeping:  { sound: '',                          volume: 0,   pitch: 1 }
+  neutral:   { sound: '',                          volume: 0,   pitch: 1 }
+  blink:     { sound: '',                          volume: 0,   pitch: 1 }

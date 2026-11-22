@@ -1,0 +1,13 @@
+name: Humans
+version: '${version}'
+main: dev.timur.humans.HumansPlugin
+api-version: '26.3'
+description: Smart player-like humans powered by Gemini Decision + Flash-Lite
+commands:
+  humans:
+    description: Manage AI humans
+    aliases: [hu]
+    permission: humans.admin
+permissions:
+  humans.admin:
+    default: op
