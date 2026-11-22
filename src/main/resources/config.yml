@@ -11,7 +11,7 @@ text:
   model: deepseek-v4.1-flash-free
   # File containing the API key (never put the key itself in this config)
   api_key_file: plugins/Humans/text.key
-  per_minute: 30
+  per_minute: 60
   speech_max_tokens: 900
   plan_max_tokens: 4000
   plan_timeout_seconds: 70
@@ -48,6 +48,13 @@ budget:
   chat_per_minute: 8
 
 brain:
+  # Who picks everyday actions: deepseek (the text AI, free) or gemini (Gemini Decision).
+  # If DeepSeek errors or is busy, the call falls back to Gemini Decision, then to the offline brain.
+  engine: deepseek
+  deepseek_max_humans_per_call: 8
+  deepseek_min_seconds_between_calls: 2.5
+  deepseek_max_tokens: 3500
+  deepseek_timeout_seconds: 25
   # Max humans decided in one batched call
   max_humans_per_call: 20
   # Re-think a long-running task after this many seconds

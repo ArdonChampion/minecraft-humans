@@ -451,6 +451,7 @@ public final class OptionGenerator {
         int bx = loc.getBlockX(), by = loc.getBlockY(), bz = loc.getBlockZ();
         int r = 18;
         var zones = HumansPlugin.get().zones();
+        Location eye = h.valid() ? h.entity.getEyeLocation() : loc.clone().add(0, 1.6, 0);
         boolean colProtected = false;
         for (int dx = -r; dx <= r; dx++)
             for (int dz = -r; dz <= r; dz++) {
@@ -470,18 +471,30 @@ public final class OptionGenerator {
                     if (Tag.LOGS.isTagged(t)) {
                         Material below = b.getRelative(BlockFace.DOWN).getType();
                         if (d < s.treeD && (Tag.DIRT.isTagged(below) || below == Material.GRASS_BLOCK || below == Material.PODZOL || below == Material.MYCELIUM)
-                            && !h.isBad(b, m.now()) && naturalTree(b)) { s.tree = b; s.treeD = d; }
+                            && !h.isBad(b, m.now()) && naturalTree(b) && (d < 6 || seesTree(eye, b))) { s.tree = b; s.treeD = d; }
                     } else if (t.name().endsWith("_ORE")) {
-                        if (d <= 14 && exposed(b) && !h.isBad(b, m.now())) {
+                        if (d <= 14 && exposed(b) && !h.isBad(b, m.now()) && d < s.oreD.getOrDefault(oreName(t), 1e9) && visible(eye, b)) {
                             String ore = t.name().replace("DEEPSLATE_", "").toLowerCase(Locale.ROOT).replace('_', ' ');
                             if (d < s.oreD.getOrDefault(ore, 1e9)) { s.ores.put(ore, b); s.oreD.put(ore, d); }
                         }
-                    } else if ((t == Material.STONE || t == Material.DEEPSLATE || t == Material.ANDESITE || t == Material.DIORITE || t == Material.GRANITE) && d <= 12 && d < s.stoneD && dy >= -2 && exposed(b) && !h.isBad(b, m.now())) {
+                    } else if ((t == Material.STONE || t == Material.DEEPSLATE || t == Material.ANDESITE || t == Material.DIORITE || t == Material.GRANITE) && d <= 12 && d < s.stoneD && dy >= -2 && exposed(b) && !h.isBad(b, m.now()) && visible(eye, b)) {
                         s.stone = b; s.stoneD = d;
                     }
                 }
             }
         return s;
+    }
+
+    private static String oreName(Material t) { return t.name().replace("DEEPSLATE_", "").toLowerCase(Locale.ROOT).replace('_', ' '); }
+
+    private static boolean visible(Location eye, Block b) { return dev.timur.humans.tasks.Act.visibleFrom(eye, b); }
+
+    /** A tree counts as seen when any of its logs (trunk is often hidden by a hill or wall) is visible. */
+    private static boolean seesTree(Location eye, Block base) {
+        Block b = base;
+        for (int i = 0; i < 8 && Tag.LOGS.isTagged(b.getType()); i++, b = b.getRelative(BlockFace.UP))
+            if (i % 2 == 0 && visible(eye, b)) return true;
+        return false;
     }
 
     static boolean exposed(Block b) {

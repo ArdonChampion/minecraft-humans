@@ -43,12 +43,15 @@ public final class TextClient {
         }
     }
 
+    /** DeepSeek itself is usable right now (key present, not paused after errors). */
+    public boolean primaryReady() { return key != null && !key.isEmpty() && System.currentTimeMillis() > downUntilMs; }
+
     public boolean ready() { return key != null && !key.isEmpty() || plugin.gemini().ready(); }
 
     private synchronized boolean allowed() {
         long now = System.currentTimeMillis();
         while (!window.isEmpty() && now - window.peekFirst() > 60_000) window.pollFirst();
-        if (window.size() >= plugin.getConfig().getInt("text.per_minute", 30)) return false;
+        if (window.size() >= plugin.getConfig().getInt("text.per_minute", 60)) return false;
         window.addLast(now);
         return true;
     }
@@ -63,7 +66,7 @@ public final class TextClient {
      */
     public CompletableFuture<String> complete(String system, String user, int maxTokens, int timeoutSec, int fallbackTokens) {
         boolean primary = key != null && !key.isEmpty() && System.currentTimeMillis() > downUntilMs && allowed();
-        if (!primary) return fallback(system, user, fallbackTokens);
+        if (!primary) return fallbackTokens > 0 ? fallback(system, user, fallbackTokens) : CompletableFuture.failedFuture(new IllegalStateException("text AI paused or rate-limited"));
         JsonObject body = new JsonObject();
         body.addProperty("model", plugin.getConfig().getString("text.model", "deepseek-v4.1-flash-free"));
         body.addProperty("max_tokens", maxTokens);
@@ -100,9 +103,10 @@ public final class TextClient {
                 out.complete(content);
             } catch (Exception e) {
                 failures++;
-                dev.timur.humans.HumanLog.log("ai_error", null, "api", "text", "ms", System.currentTimeMillis() - t0, "error", String.valueOf(e.getMessage()), "fallback", "gemini");
+                dev.timur.humans.HumanLog.log("ai_error", null, "api", "text", "ms", System.currentTimeMillis() - t0, "error", String.valueOf(e.getMessage()), "fallback", fallbackTokens > 0 ? "gemini" : "caller");
                 if (e instanceof java.net.http.HttpTimeoutException) downUntilMs = System.currentTimeMillis() + 20_000;
                 if (plugin.debug()) plugin.getLogger().info("[debug] text AI failed (" + e.getMessage() + "), falling back to Gemini");
+                if (fallbackTokens <= 0) { out.completeExceptionally(e); return; }
                 fallback(system, user, fallbackTokens).whenComplete((v, e2) -> { if (e2 != null) out.completeExceptionally(e2); else out.complete(v); });
             } finally { if (got) slots.release(); }
         });

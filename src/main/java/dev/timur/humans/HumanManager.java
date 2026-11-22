@@ -148,12 +148,19 @@ public final class HumanManager {
     }
 
     public void link(Human h, Mannequin m) {
-        if (h.entity != null && h.entity.isValid() && !h.entity.equals(m)) { m.remove(); return; } // duplicate body
+        if (h.entity != null && h.entity.isValid() && !h.entity.equals(m)) { Bukkit.getScheduler().runTask(plugin, () -> { if (m.isValid()) m.remove(); }); return; } // duplicate body
         h.entity = m;
         h.shown = null;
         byEntity.put(m.getUniqueId(), h);
         h.updateFace(plugin, now);
         applyScale(h);
+        nightVision(h);
+    }
+
+    /** Humans see in the dark (no particles): caves and nights don't blind them. */
+    public static void nightVision(Human h) {
+        if (!h.valid() || h.entity.hasPotionEffect(org.bukkit.potion.PotionEffectType.NIGHT_VISION)) return;
+        h.entity.addPotionEffect(new org.bukkit.potion.PotionEffect(org.bukkit.potion.PotionEffectType.NIGHT_VISION, org.bukkit.potion.PotionEffect.INFINITE_DURATION, 0, false, false, false));
     }
 
     public void onEntityAdded(Entity e) {
@@ -161,7 +168,7 @@ public final class HumanManager {
         String id = m.getPersistentDataContainer().get(idKey, PersistentDataType.STRING);
         if (id == null) return;
         Human h = humans.get(UUID.fromString(id));
-        if (h == null || h.dead) { m.remove(); return; } // orphaned body
+        if (h == null || h.dead) { Bukkit.getScheduler().runTask(plugin, () -> { if (m.isValid()) m.remove(); }); return; } // orphaned body (removed next tick: not allowed mid chunk-load)
         link(h, m);
     }
 
@@ -286,6 +293,7 @@ public final class HumanManager {
             if (now % 10 == 0) { Player p = nearestPlayer(h, 6); if (p != null) Act.lookAt(h, p.getEyeLocation()); }
         }
         if (now % 10 == 0) h.setStatus(statusLine(h));
+        if ((now + (h.id.hashCode() & 255)) % 200 == 0) nightVision(h); // milk / death / reload can remove it
         if ((now + (h.id.hashCode() & 1023)) % 1200 == 0 && HumanLog.on()) { // a status snapshot every minute
             com.google.gson.JsonObject st = HumanLog.ev("status", h);
             HumanLog.put(st, "task", h.task == null ? null : h.task.label());

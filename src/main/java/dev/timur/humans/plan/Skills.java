@@ -221,6 +221,19 @@ public final class Skills {
                 if (to.distance(l) > 60) return Start.err("that spot is too far");
                 return Start.task(new Work.StandAt(to, player(s(a, "face", "")), i(a, "seconds", 20)));
             }
+            case "break_block", "break_blocks", "dig" -> {
+                int x = i(a, "x", Integer.MIN_VALUE), y = i(a, "y", Integer.MIN_VALUE), z = i(a, "z", Integer.MIN_VALUE);
+                if (x == Integer.MIN_VALUE || y == Integer.MIN_VALUE || z == Integer.MIN_VALUE) return Start.err("break_block needs x, y and z");
+                int x2 = i(a, "x2", x), y2 = i(a, "y2", y), z2 = i(a, "z2", z);
+                List<Block> bl = new ArrayList<>();
+                for (int bx = Math.min(x, x2); bx <= Math.max(x, x2); bx++) for (int by = Math.min(y, y2); by <= Math.max(y, y2); by++) for (int bz = Math.min(z, z2); bz <= Math.max(z, z2); bz++) {
+                    if (bl.size() >= 32) return Start.err("too many blocks at once (max 32) - split it into smaller boxes");
+                    bl.add(l.getWorld().getBlockAt(bx, by, bz));
+                }
+                if (bl.getFirst().getLocation().distance(l) > 48) return Start.err("that's too far away - go_to it first");
+                // inside a player's base only when a player asked for it
+                return Start.task(new Work.BreakBlocks(bl, g.fromId != null));
+            }
             case "wait", "rest" -> { return Start.task(new Tasks.Idle(Math.max(1, Math.min(i(a, "seconds", 5), 60)) * 20, "waiting")); }
             case "dance" -> { return Start.task(new Life.Dance()); }
             case "pet_animal", "pet" -> {

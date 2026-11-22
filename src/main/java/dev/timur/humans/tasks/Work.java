@@ -104,7 +104,7 @@ public final class Work {
             return Status.RUNNING;
         }
         private Block find(Human h, HumanManager m) {
-            Location l = h.loc(); World w = l.getWorld();
+            Location l = h.loc(); World w = l.getWorld(); Location eye = Act.realEye(h);
             Block best = null; double bd = 24 * 24;
             for (int dx = -24; dx <= 24; dx++) for (int dz = -24; dz <= 24; dz++) {
                 if (!w.isChunkLoaded((l.getBlockX() + dx) >> 4, (l.getBlockZ() + dz) >> 4)) continue;
@@ -112,7 +112,7 @@ public final class Work {
                     double d = dx * dx + dz * dz + dy * dy;
                     if (d >= bd) continue;
                     Block b = w.getBlockAt(l.getBlockX() + dx, l.getBlockY() + dy, l.getBlockZ() + dz);
-                    if (!types.contains(b.getType()) || h.isBad(b, m.now()) || !exposed(b) || prot(h, b)) continue;
+                    if (!types.contains(b.getType()) || h.isBad(b, m.now()) || !exposed(b) || prot(h, b) || !Act.visibleFrom(eye, b)) continue;
                     bd = d; best = b;
                 }
             }
@@ -189,7 +189,7 @@ public final class Work {
             }
             while (!ores.isEmpty()) {
                 Block b = ores.poll();
-                if (b.getType().name().endsWith("_ORE") && Act.inReach(h, b) && !nearLiquid(b)) { breaker = new Tasks.Breaker(); breaker.target = b; return Status.RUNNING; }
+                if (b.getType().name().endsWith("_ORE") && Act.inReach(h, b) && Act.canSee(h, b) && !nearLiquid(b)) { breaker = new Tasks.Breaker(); breaker.target = b; return Status.RUNNING; }
             }
             if (!tunnel && feet.getY() <= targetY) tunnel = true;
             if (tunnel && steps >= length) { outcome = "strip-mined " + steps + " blocks at y=" + feet.getY(); return result(h); }
@@ -201,7 +201,7 @@ public final class Work {
             for (Block b : clear) if (nearLiquid(b) || b.getType() == Material.LAVA || b.getType() == Material.WATER) { turn(); return Status.RUNNING; }
             for (Block b : clear) {
                 if (Navigator.passable(b)) continue;
-                if (!Life.Escape.diggable(b.getType()) && !b.getType().name().endsWith("_ORE") || prot(h, b)) { turn(); return Status.RUNNING; }
+                if (!Act.breakable(b) || prot(h, b)) { turn(); return Status.RUNNING; }
                 breaker = new Tasks.Breaker(); breaker.target = b;
                 return Status.RUNNING;
             }
@@ -231,6 +231,51 @@ public final class Work {
                 if (t == Material.LAVA || t == Material.WATER) return true;
             }
             return false;
+        }
+    }
+
+    // ================================================================ breaking specific blocks
+
+    /** Walk up to some blocks and break them like a player: only what you can see, any tool (slow without the right one). */
+    public static final class BreakBlocks extends Task {
+        private final Deque<Block> todo; private final boolean allowProtected; private Tasks.Breaker breaker; private Block cur; private int broken, skipped, waitSee;
+        private final List<String> notes = new ArrayList<>();
+        public BreakBlocks(List<Block> blocks, boolean allowProtected) { this.todo = new ArrayDeque<>(blocks); this.allowProtected = allowProtected; }
+        public String label() { return "breaking blocks (" + broken + "/" + (broken + skipped + todo.size() + (cur != null ? 1 : 0)) + ")"; }
+        public int maxTicks() { return 20 * 60 * 4; }
+        @Override public boolean isWork() { return true; }
+        protected Status run(Human h, HumanManager m) {
+            if (breaker != null) {
+                if (breaker.target.getType().isAir()) { breaker = null; cur = null; return Status.RUNNING; }
+                if (breaker.tick(h, m)) { broken++; breaker = null; cur = null; }
+                return Status.RUNNING;
+            }
+            if (cur == null || cur.getType().isAir()) {
+                cur = null;
+                while (!todo.isEmpty() && cur == null) {
+                    Block b = todo.poll();
+                    if (b.getType().isAir() || b.isLiquid()) continue;
+                    if (!Act.breakable(b)) { skipped++; note(b, "can't be broken (too hard, or it's storage/a bed)"); continue; }
+                    if (!allowProtected && prot(h, b)) { skipped++; note(b, "is in a player's base"); continue; }
+                    cur = b; waitSee = 0;
+                }
+                if (cur == null) return done(h);
+                if (!Act.rightTool(h, cur)) notes.add(cur.getType().name().toLowerCase(Locale.ROOT) + " without the right tool takes long and drops nothing");
+            }
+            if (Act.inReach(h, cur)) {
+                Block ob = Act.obstruction(h, cur);
+                if (ob == null) { h.nav.stop(); breaker = new Tasks.Breaker(); breaker.target = cur; return Status.RUNNING; }
+                if (++waitSee > 60) { skipped++; note(cur, "can't be seen, " + ob.getType().name().toLowerCase(Locale.ROOT) + " is in the way at " + ob.getX() + " " + ob.getY() + " " + ob.getZ()); cur = null; return Status.RUNNING; }
+            }
+            if (!h.nav.active() && !h.nav.moveTo(cur.getLocation().add(0.5, 0, 0.5), 1.5, false)) { skipped++; note(cur, "can't walk there"); cur = null; return Status.RUNNING; }
+            if (h.nav.tick() == Navigator.Result.FAILED && !Act.inReach(h, cur)) { skipped++; note(cur, "can't walk there"); cur = null; }
+            return Status.RUNNING;
+        }
+        private void note(Block b, String why) { if (notes.size() < 4) notes.add(b.getType().name().toLowerCase(Locale.ROOT) + " at " + b.getX() + " " + b.getY() + " " + b.getZ() + " " + why); }
+        private Status done(Human h) {
+            h.nav.stop();
+            outcome = "broke " + broken + " blocks" + (skipped > 0 ? ", skipped " + skipped : "") + (notes.isEmpty() ? "" : " (" + String.join("; ", new LinkedHashSet<>(notes)) + ")");
+            return broken > 0 || skipped == 0 ? Status.SUCCESS : Status.FAIL;
         }
     }
 

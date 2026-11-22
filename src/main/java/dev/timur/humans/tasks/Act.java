@@ -15,6 +15,9 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Vector;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Low-level physical actions shared by tasks. */
 public final class Act {
     private Act() {}
@@ -25,6 +28,76 @@ public final class Act {
 
     public static boolean inReach(Human h, Block b) {
         return eye(h).distance(b.getLocation().add(0.5, 0.5, 0.5)) <= REACH;
+    }
+
+    /** Real eye position (children are smaller). */
+    public static Location realEye(Human h) { return h.entity.getEyeLocation(); }
+
+    /**
+     * Line of sight like a player: can the human see some part of this block from its eyes, without anything solid in the way?
+     * Returns null when visible, otherwise the first block that blocks the view.
+     */
+    public static Block obstruction(Human h, Block b) {
+        Location eye = realEye(h);
+        Block first = null;
+        Vector e = eye.toVector(), c = b.getLocation().toVector().add(new Vector(0.5, 0.5, 0.5));
+        // the block centre plus the centres of the faces turned towards the eye
+        List<Vector> aims = new ArrayList<>(4);
+        aims.add(c);
+        double dx = e.getX() - c.getX(), dy = e.getY() - c.getY(), dz = e.getZ() - c.getZ();
+        if (Math.abs(dx) > 0.5) aims.add(c.clone().add(new Vector(Math.signum(dx) * 0.49, 0, 0)));
+        if (Math.abs(dy) > 0.5) aims.add(c.clone().add(new Vector(0, Math.signum(dy) * 0.49, 0)));
+        if (Math.abs(dz) > 0.5) aims.add(c.clone().add(new Vector(0, 0, Math.signum(dz) * 0.49)));
+        for (Vector aim : aims) {
+            Vector dir = aim.clone().subtract(e);
+            double len = dir.length();
+            if (len < 0.05) return null;
+            org.bukkit.util.RayTraceResult r = eye.getWorld().rayTraceBlocks(eye, dir.normalize(), len + 0.3, org.bukkit.FluidCollisionMode.NEVER, true);
+            if (r == null || r.getHitBlock() == null || r.getHitBlock().equals(b)) return null;
+            if (first == null) first = r.getHitBlock();
+        }
+        return first;
+    }
+
+    public static boolean canSee(Human h, Block b) { return obstruction(h, b) == null; }
+
+    /** Can see the block from this standing spot (used when scanning, before walking anywhere). */
+    public static boolean visibleFrom(Location eye, Block b) {
+        Vector e = eye.toVector(), c = b.getLocation().toVector().add(new Vector(0.5, 0.5, 0.5));
+        Vector dir = c.clone().subtract(e);
+        double len = dir.length();
+        if (len < 0.05) return true;
+        // aim at the face nearest to the eye: that's what you'd actually see of it
+        Vector toEye = e.clone().subtract(c);
+        Vector face = c.clone();
+        double ax = Math.abs(toEye.getX()), ay = Math.abs(toEye.getY()), az = Math.abs(toEye.getZ());
+        if (ax >= ay && ax >= az) face.add(new Vector(Math.signum(toEye.getX()) * 0.49, 0, 0));
+        else if (ay >= az) face.add(new Vector(0, Math.signum(toEye.getY()) * 0.49, 0));
+        else face.add(new Vector(0, 0, Math.signum(toEye.getZ()) * 0.49));
+        for (Vector aim : new Vector[]{face, c}) {
+            Vector d = aim.clone().subtract(e);
+            org.bukkit.util.RayTraceResult r = eye.getWorld().rayTraceBlocks(eye, d.clone().normalize(), d.length() + 0.3, org.bukkit.FluidCollisionMode.NEVER, true);
+            if (r == null || r.getHitBlock() == null || r.getHitBlock().equals(b)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Anything a player could break by hand if they really had to (slowly): not unbreakable, not liquid,
+     * not something absurdly hard (obsidian takes minutes), and never storage/beds/etc.
+     */
+    public static boolean breakable(Block b) {
+        Material t = b.getType();
+        float hard = t.getHardness();
+        if (hard < 0 || hard > 10 || t.isAir() || t == Material.WATER || t == Material.LAVA) return false;
+        return !(b.getState(false) instanceof org.bukkit.block.TileState);
+    }
+
+    /** Would the human's best tool actually harvest this block (get its drop)? */
+    public static boolean rightTool(Human h, Block b) {
+        if (!b.getBlockData().requiresCorrectToolForDrops()) return true;
+        Material tool = toolFor(h, b);
+        return tool != null && b.isPreferredTool(new ItemStack(tool));
     }
 
     public static void lookAt(Human h, Location l) {
@@ -47,13 +120,17 @@ public final class Act {
             if (p.getLocation().distanceSquared(b.getLocation()) < 48 * 48) p.sendBlockDamage(b.getLocation(), progress, sourceId);
     }
 
-    /** Ticks needed to break a block with the human's best tool. */
+    /**
+     * Ticks needed to break a block with the human's best tool. Like vanilla: without the right tool it's
+     * possible but ~3x slower (and blocks that need a pickaxe drop nothing).
+     */
     public static int breakTicks(Human h, Block b) {
         float hard = b.getType().getHardness();
         if (hard < 0) return Integer.MAX_VALUE;
         double speed = 1;
         Material tool = toolFor(h, b);
         if (tool != null) speed = switch (Items.tierOf(tool)) { case WOOD -> 2; case STONE -> 4; case IRON -> 6; case DIAMOND -> 8; default -> 1; };
+        if (!rightTool(h, b)) return Math.max(6, (int) Math.ceil(hard * 150 / speed));
         return Math.max(6, (int) Math.ceil(hard * 45 / speed));
     }
 

@@ -46,6 +46,7 @@ public final class Planner {
         ask {player:"NAME", text:"question"} - ask a player (their reply shows up in your recent events next round)
         say {text:"..."}
         stand_at {x:int,y:int,z:int, face:"PLAYER_NAME", seconds:int} - go to an exact spot and stay there (e.g. lining up)
+        break_block {x:int,y:int,z:int, x2:int,y2:int,z2:int} - walk over and break one block (or a box of up to 32, x2/y2/z2 optional) like a player: you must be able to see it (break what's in front first), any block works but without the right tool it's ~3x slower and stone-type blocks drop nothing without a pickaxe. Storage/beds can't be broken.
         wait {seconds:int}
         dance {} | pet_animal {}
         have_baby {with:"HUMAN_NAME"} - start a family with another adult human; you both need to be fed and have 6+ food items between you
@@ -77,7 +78,7 @@ public final class Planner {
         Location l = h.loc(); World w = l.getWorld();
         StringBuilder s = new StringBuilder();
         long t = w.getTime();
-        s.append("TIME: day ").append(w.getFullTime() / 24000 + 1).append(t < 12600 || t > 23400 ? ", daytime" : ", NIGHT").append(w.hasStorm() ? ", raining" : "").append(".\n");
+        s.append("TIME: day ").append(w.getFullTime() / 24000 + 1).append(t < 12600 || t > 23400 ? ", daytime" : ", NIGHT").append(w.hasStorm() ? ", raining" : "").append(". You see perfectly in the dark (night vision), so darkness never blocks you.\n");
         s.append("YOU: ").append(h.name).append(h.isChild() ? " (a child)" : "").append(" at x=").append(l.getBlockX()).append(" y=").append(l.getBlockY()).append(" z=").append(l.getBlockZ())
             .append(h.underground ? " (UNDERGROUND, no sky)" : "").append(h.trapped ? " (TRAPPED)" : "")
             .append(String.format(". Health %.0f/20, hunger %.0f/20, energy %.0f/20.%n", h.entity.getHealth(), h.hunger, h.energy));

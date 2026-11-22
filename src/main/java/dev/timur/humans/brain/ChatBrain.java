@@ -357,6 +357,7 @@ public final class ChatBrain implements Listener {
             + "You feel " + h.mood.id() + " and you " + Human.trustWord(h.trustOf(p.getUniqueId())) + " " + p.getName() + ". "
             + "Right now you are " + (h.task == null ? "idle" : h.task.label()) + ". Health " + Math.round(h.entity.getHealth()) + "/20, hunger " + Math.round(h.hunger) + "/20, energy " + Math.round(h.energy) + "/20. "
             + (h.trapped ? "You are STUCK in a hole right now. " : "") + (h.fireAtHome ? "Your house is ON FIRE! " : h.fireNear > 0 ? "There's fire burning near you! " : "")
+            + "You can see fine in the dark (like night vision), so night or caves don't blind you. "
             + (h.project != null ? "Your current project: " + OptionGenerator.projectDesc(h.project) + ". " : "")
             + "You carry: " + h.inv.describe() + ". " + (h.hutBuilt ? "You have built your own house. " : "You don't have a house yet. ")
             + (h.recent.isEmpty() ? "" : "Recent events: " + String.join(" | ", h.recent) + ". ")

@@ -66,7 +66,8 @@ public final class Life {
             for (Block b : new Block[]{head, up2, up1}) {
                 if (Navigator.passable(b)) continue;
                 Material t = b.getType();
-                if (!diggable(t) || HumansPlugin.get().zones().isProtected(b, h)) { turn(); return Status.RUNNING; }
+                // anything breakable if we must (slow without the right tool); inside a player's base only when really trapped
+                if (!Act.breakable(b) || goal != null && HumansPlugin.get().zones().isProtected(b, h)) { turn(); return Status.RUNNING; }
                 breaker = new Tasks.Breaker(); breaker.target = b;
                 return Status.RUNNING;
             }
@@ -98,7 +99,8 @@ public final class Life {
                     Block b = feet.getRelative(f.getModX() * i, i, f.getModZ() * i);
                     for (Block x : new Block[]{b, b.getRelative(BlockFace.UP)}) {
                         if (x.getType() == Material.LAVA || x.getType() == Material.WATER) cost += 100;
-                        else if (!Navigator.passable(x) && !diggable(x.getType())) cost += 1000;
+                        else if (!Navigator.passable(x) && !Act.breakable(x)) cost += 1000;
+                        else if (!Navigator.passable(x) && !diggable(x.getType())) cost += 8 + (int) (x.getType().getHardness() * 3); // someone's build: avoid if possible
                         else if (!Navigator.passable(x)) cost += 1 + (int) x.getType().getHardness();
                     }
                 }
@@ -137,7 +139,7 @@ public final class Life {
                 }
                 if (!h.nav.moveTo(cur.getLocation().add(0.5, 0, 0.5), 2.2, true)) { h.markBad(cur, m.now()); cur = null; if (++misses > 6) { outcome = "couldn't reach the flames"; return Status.FAIL; } return Status.RUNNING; }
             }
-            if (Act.eye(h).distance(cur.getLocation().add(0.5, 0.5, 0.5)) <= 3.6) {
+            if (Act.eye(h).distance(cur.getLocation().add(0.5, 0.5, 0.5)) <= 3.6 && Act.canSee(h, cur)) {
                 h.nav.stop();
                 Act.lookAt(h, cur.getLocation().add(0.5, 0.3, 0.5));
                 Act.swing(h);

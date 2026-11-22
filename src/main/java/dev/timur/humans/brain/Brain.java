@@ -15,7 +15,7 @@ import java.util.*;
 import java.util.logging.Level;
 
 /**
- * Batches every human that needs a decision into ONE Gemini Decision call:
+ * Batches every human that needs a decision into ONE AI call (DeepSeek by default, Gemini Decision as fallback):
  * shared evidence = world + each human's situation; per human: action choice, mood, should-talk.
  * Falls back to a hand-written utility brain when the API is unavailable or out of budget.
  */
@@ -38,7 +38,7 @@ public final class Brain {
             if (h.offlineNext) { it.remove(); h.offlineNext = false; decideOffline(h, m); }
         }
         if (want.isEmpty()) return;
-        // humans nobody can see use the free offline brain; Gemini is spent where players are
+        // humans nobody can see use the free offline brain; AI is spent where players are
         if (!plugin.getConfig().getBoolean("brain.always_awake", false)) {
             double r = plugin.getConfig().getDouble("brain.ai_radius", 48);
             for (Iterator<Human> it = want.iterator(); it.hasNext(); ) {
@@ -48,9 +48,11 @@ public final class Brain {
             if (want.isEmpty()) return;
         }
         long nowMs = System.currentTimeMillis();
-        double minGap = plugin.getConfig().getDouble("budget.min_seconds_between_calls", 2.0) * 1000;
-        if (consecutiveErrors > 0) minGap *= Math.min(30, 1 << Math.min(consecutiveErrors, 5));
-        boolean aiOk = plugin.gemini().ready();
+        boolean deepseek = "deepseek".equalsIgnoreCase(plugin.getConfig().getString("brain.engine", "deepseek")) && plugin.text().primaryReady();
+        boolean aiOk = deepseek || plugin.gemini().ready();
+        double minGap = (deepseek ? plugin.getConfig().getDouble("brain.deepseek_min_seconds_between_calls", 2.5)
+            : plugin.getConfig().getDouble("budget.min_seconds_between_calls", 2.0)) * 1000;
+        if (!deepseek && consecutiveErrors > 0) minGap *= Math.min(30, 1 << Math.min(consecutiveErrors, 5));
         boolean urgent = want.stream().anyMatch(h -> h.urgent);
         if (aiOk && nowMs - lastCallMs < (urgent && consecutiveErrors == 0 ? 400 : minGap)) {
             // humans with nothing to do shouldn't stand around too long: fall back if they've waited > 6s
@@ -58,15 +60,115 @@ public final class Brain {
             return;
         }
         want.sort(Comparator.comparingLong(h -> h.lastThinkTick));
-        int max = plugin.getConfig().getInt("brain.max_humans_per_call", 20);
+        int max = deepseek ? plugin.getConfig().getInt("brain.deepseek_max_humans_per_call", 8) : plugin.getConfig().getInt("brain.max_humans_per_call", 20);
         if (want.size() > max) want = new ArrayList<>(want.subList(0, max));
 
         Map<Human, List<Option>> options = new LinkedHashMap<>();
         for (Human h : want) options.put(h, OptionGenerator.generate(h, m));
 
         if (!aiOk) { options.forEach((h, o) -> applyChoice(h, o, null, m)); return; }
+        if (deepseek) deepseekDecide(options, m, nowMs);
+        else geminiDecide(options, m, nowMs);
+    }
 
-        StringBuilder input = new StringBuilder(header(want.getFirst().loc().getWorld()));
+    private static final String GUIDE = "Live like a real, believable person in this world, with their personality. Notice your situation first: if trapped, on fire or in danger, deal with that. "
+        + "Otherwise mix things up like a real person: some work (gathering, crafting, your project), some fun (animals, flowers, exploring, watching the view, chatting with other humans) "
+        + "and some rest when tired. Avoid doing the same kind of thing again and again. Keep promises to players, help friends, be playful and entertaining when players are around. "
+        + "Don't repeat an action that just failed.";
+
+    private boolean mayTalk(Human h, HumanManager m) {
+        return m.nearestPlayer(h, 16) != null && System.currentTimeMillis() - h.lastTalkMs > plugin.getConfig().getInt("brain.talk_cooldown_seconds", 40) * 1000L;
+    }
+
+    /** Everyday decisions through the DeepSeek text model (free, better reasoning). Falls back to Gemini Decision, then offline. */
+    private void deepseekDecide(Map<Human, List<Option>> options, HumanManager m, long nowMs) {
+        StringBuilder user = new StringBuilder(header(options.keySet().iterator().next().loc().getWorld()));
+        Map<Human, String> qids = new HashMap<>();
+        Map<String, Boolean> talkOk = new HashMap<>();
+        int i = 0;
+        for (var e : options.entrySet()) {
+            Human h = e.getKey();
+            String q = "h" + (++i);
+            qids.put(h, q);
+            user.append(context(h, q, m));
+            user.append("OPTIONS for ").append(q).append(" (").append(h.name).append("):\n");
+            Set<String> seen = new HashSet<>();
+            for (Option o : e.getValue()) if (seen.add(o.id())) user.append("- ").append(o.id()).append(": ").append(o.text()).append("\n");
+            boolean t = mayTalk(h, m);
+            talkOk.put(q, t);
+            user.append(t ? "(players are close: " + h.name + " may say something out loud)\n\n" : "(" + h.name + " should stay quiet now)\n\n");
+            h.thinking = true;
+            h.lastThinkTick = m.now();
+        }
+        StringBuilder keys = new StringBuilder();
+        for (String q : qids.values().stream().sorted().toList()) keys.append(keys.isEmpty() ? "" : ",").append("\"").append(q).append("\":{...}");
+        String system = "You are the inner minds of AI-controlled humans in a Minecraft survival world (they act like real survival players). "
+            + "For EACH section, choose what that human does next: pick exactly one option id from that section's OPTIONS list (copy the id exactly). "
+            + GUIDE + " Players' requests and warnings matter most; a player asking for something fun deserves a yes.\n"
+            + "Reply with ONLY one JSON object, no markdown, no extra text:\n"
+            + "{" + keys + "} where each value is {\"act\":\"option_id\",\"mood\":\"neutral|happy|sad|angry|scared|surprised\",\"talk\":true|false,\"why\":\"max 12 words\"}. "
+            + "talk=true only if that human would naturally say something out loud right now (and is allowed to).";
+        inFlight = true;
+        lastCallMs = nowMs;
+        int maxTokens = plugin.getConfig().getInt("brain.deepseek_max_tokens", 3500);
+        int timeout = plugin.getConfig().getInt("brain.deepseek_timeout_seconds", 25);
+        plugin.text().complete(system, user.toString(), maxTokens, timeout, 0).whenComplete((res, err) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            inFlight = false;
+            long ms = System.currentTimeMillis() - nowMs;
+            JsonObject root = null;
+            String perr = null;
+            if (err == null) {
+                try { root = parseJson(res); } catch (Exception ex) { perr = "unparseable: " + ex.getMessage(); }
+            }
+            Map<Human, List<Option>> retry = new LinkedHashMap<>();
+            int ok = 0;
+            for (var e : options.entrySet()) {
+                Human h = e.getKey(); String q = qids.get(h);
+                JsonObject a = root != null && root.has(q) && root.get(q).isJsonObject() ? root.getAsJsonObject(q) : null;
+                String act = a != null && a.has("act") && a.get("act").isJsonPrimitive() ? a.get("act").getAsString().trim() : null;
+                boolean valid = act != null && e.getValue().stream().anyMatch(o -> o.id().equals(act));
+                if (!valid) { retry.put(h, e.getValue()); continue; }
+                ok++;
+                h.thinking = false;
+                if (!h.valid()) continue;
+                JsonObject answers = new JsonObject();
+                JsonObject ja = new JsonObject(); ja.addProperty("choice", act); ja.addProperty("confidence", 0.9); answers.add(q + "_act", ja);
+                if (a.has("mood") && a.get("mood").isJsonPrimitive()) {
+                    JsonObject jm = new JsonObject(); jm.addProperty("choice", a.get("mood").getAsString().trim().toLowerCase(Locale.ROOT)); jm.addProperty("confidence", 0.9); answers.add(q + "_mood", jm);
+                }
+                if (Boolean.TRUE.equals(talkOk.get(q))) {
+                    boolean talk = false;
+                    try { talk = a.has("talk") && a.get("talk").isJsonPrimitive() && a.get("talk").getAsBoolean(); } catch (Exception ignored) {}
+                    JsonObject jt = new JsonObject(); jt.addProperty("noul", talk ? 1.0 : 0.0); answers.add(q + "_talk", jt);
+                }
+                if (a.has("why") && a.get("why").isJsonPrimitive()) answers.addProperty(q + "_why", a.get("why").getAsString());
+                applyChoice(h, e.getValue(), answers, m, q, "deepseek");
+            }
+            HumanLog.log(err != null || perr != null ? "ai_error" : "ai_call", null, "api", "decision_deepseek", "humans", options.size(), "answered", ok, "ms", ms,
+                "error", err != null ? String.valueOf(err.getMessage()) : perr, "reply", err == null && (root == null || ok < options.size()) ? res : null);
+            if (plugin.debug()) plugin.getLogger().info("[debug] deepseek decision for " + options.size() + " humans: " + ok + " ok in " + ms + "ms" + (err != null ? " err " + err.getMessage() : ""));
+            if (retry.isEmpty()) return;
+            for (Human h : retry.keySet()) h.thinking = false;
+            // DeepSeek failed for these: Gemini Decision if possible, else the offline brain
+            if (plugin.gemini().ready() && !inFlight) geminiDecide(retry, m, System.currentTimeMillis());
+            else retry.forEach((h, o) -> { if (h.valid()) applyChoice(h, o, null, m); });
+        }));
+    }
+
+    /** Pull the JSON object out of a model reply (ignores think tags / code fences / chatter). */
+    static JsonObject parseJson(String s) {
+        if (s == null) throw new IllegalArgumentException("empty");
+        s = s.replaceAll("(?s)<think>.*?</think>", "");
+        int a = s.indexOf('{'), b = s.lastIndexOf('}');
+        if (a < 0 || b <= a) throw new IllegalArgumentException("no JSON object");
+        com.google.gson.stream.JsonReader r = new com.google.gson.stream.JsonReader(new java.io.StringReader(s.substring(a, b + 1)));
+        r.setLenient(true);
+        return com.google.gson.JsonParser.parseReader(r).getAsJsonObject();
+    }
+
+    private void geminiDecide(Map<Human, List<Option>> options, HumanManager m, long nowMs) {
+        if (!plugin.gemini().ready()) { options.forEach((h, o) -> applyChoice(h, o, null, m)); return; }
+        StringBuilder input = new StringBuilder(header(options.keySet().iterator().next().loc().getWorld()));
         JsonObject questions = new JsonObject();
         Map<Human, String> qids = new HashMap<>();
         int i = 0;
@@ -75,13 +177,7 @@ public final class Brain {
             String q = "h" + (++i);
             qids.put(h, q);
             input.append(context(h, q, m));
-            questions.add(q + "_act", choice(
-                "You are the mind of " + h.name + " (section " + q + "). Choose what " + h.name + " does next. Live like a real, believable person in this world, with "
-                    + h.name + "'s personality. Notice your situation first: if trapped, on fire or in danger, deal with that. Otherwise mix things up like a real person: "
-                    + "some work (gathering, crafting, your project), some fun (animals, flowers, exploring, watching the view, chatting with other humans) and some rest when tired. "
-                    + "Avoid doing the same kind of thing again and again. Keep promises to players, help friends, be playful and entertaining when players are around. "
-                    + "Don't repeat an action that just failed.",
-                e.getValue()));
+            questions.add(q + "_act", choice("You are the mind of " + h.name + " (section " + q + "). Choose what " + h.name + " does next. " + GUIDE, e.getValue()));
             JsonObject moods = new JsonObject();
             moods.addProperty("neutral", "calm, neutral, focused");
             moods.addProperty("happy", "happy, pleased, excited, grateful");
@@ -90,7 +186,7 @@ public final class Brain {
             moods.addProperty("scared", "scared, nervous, in danger");
             moods.addProperty("surprised", "surprised, amazed, confused");
             questions.add(q + "_mood", choiceRaw("Which facial expression best shows how " + h.name + " (section " + q + ") feels right now?", moods));
-            if (m.nearestPlayer(h, 16) != null && System.currentTimeMillis() - h.lastTalkMs > plugin.getConfig().getInt("brain.talk_cooldown_seconds", 40) * 1000L) {
+            if (mayTalk(h, m)) {
                 JsonObject talk = new JsonObject();
                 talk.addProperty("type", "noul");
                 talk.addProperty("instructions", "Would " + h.name + " (section " + q + ") naturally say something out loud to the players nearby right now, given their personality and what just happened?");
@@ -124,14 +220,14 @@ public final class Brain {
                 Human h = e.getKey();
                 h.thinking = false;
                 if (!h.valid()) continue;
-                applyChoice(h, e.getValue(), err == null ? res.answers() : null, m, qids.get(h));
+                applyChoice(h, e.getValue(), err == null ? res.answers() : null, m, qids.get(h), "gemini");
             }
         }));
     }
 
-    private void applyChoice(Human h, List<Option> opts, JsonObject answers, HumanManager m) { applyChoice(h, opts, answers, m, null); }
+    private void applyChoice(Human h, List<Option> opts, JsonObject answers, HumanManager m) { applyChoice(h, opts, answers, m, null, null); }
 
-    private void applyChoice(Human h, List<Option> opts, JsonObject answers, HumanManager m, String q) {
+    private void applyChoice(Human h, List<Option> opts, JsonObject answers, HumanManager m, String q, String engine) {
         Option chosen = null;
         boolean talk = false;
         if (answers != null && q != null) {
@@ -149,7 +245,7 @@ public final class Brain {
         }
         boolean fromAi = chosen != null;
         if (chosen == null) { chosen = offlinePick(h, opts, m); fallbackDecisions++; } else aiDecisions++;
-        logDecision(h, opts, chosen, fromAi ? "ai" : answers == null ? "offline" : "ai-invalid-choice", answers, q);
+        logDecision(h, opts, chosen, fromAi ? (engine == null ? "ai" : engine) : answers == null ? "offline" : "ai-invalid-choice", answers, q);
         m.startTask(h, chosen);
         if (chosen.say() != null && chosen.say().startsWith("!")) {
             if (m.nearestPlayer(h, 24) != null) plugin.chat().broadcast(h, chosen.say().substring(1));
@@ -179,6 +275,7 @@ public final class Brain {
             JsonObject act = obj(answers, q + "_act"); if (act != null) ev.addProperty("conf", conf(act));
             JsonObject md = obj(answers, q + "_mood"); if (md != null && md.has("choice")) ev.addProperty("mood", md.get("choice").getAsString());
             JsonObject t = obj(answers, q + "_talk"); if (t != null && t.has("noul")) ev.addProperty("talk", t.get("noul").getAsDouble());
+            if (answers.has(q + "_why")) ev.addProperty("why", answers.get(q + "_why").getAsString());
         }
         com.google.gson.JsonArray arr = new com.google.gson.JsonArray();
         for (int i = 0; i < Math.min(12, opts.size()); i++) arr.add(opts.get(i).id() + " " + String.format("%.2f", opts.get(i).score()));
@@ -210,7 +307,8 @@ public final class Brain {
         String part = t < 1000 ? "early morning" : t < 6000 ? "morning" : t < 11000 ? "afternoon" : t < 12600 ? "dusk (night is coming)" : t < 23000 ? "NIGHT (monsters spawn)" : "dawn";
         return "MINECRAFT WORLD STATE. Day " + (w.getFullTime() / 24000 + 1) + ", " + String.format("%02d:%02d", hour, min) + " (" + part + "). Weather: "
             + (w.isThundering() ? "thunderstorm" : w.hasStorm() ? "rain" : "clear") + ".\n"
-            + "Each section below describes one human: an AI-controlled person who lives in this world and behaves like a real survival player.\n\n";
+            + "Each section below describes one human: an AI-controlled person who lives in this world and behaves like a real survival player.\n"
+            + "All humans can see perfectly in the dark (night vision): night and caves never stop them seeing, working or finding their way - though monsters still spawn in darkness.\n\n";
     }
 
     static String context(Human h, String q, HumanManager m) {

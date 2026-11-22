@@ -201,7 +201,7 @@ public final class Tasks {
     /** Break a set of blocks of a kind (a tree, an ore vein, a patch of stone). */
     public static class Harvest extends Task {
         protected final List<Block> blocks; protected final String label, what; protected final Material kindHint;
-        private Breaker breaker; private int broken, approachFails, pause; private Block approaching; private CollectItems collect; private final List<Block> all;
+        private Breaker breaker; private int broken, approachFails, pause, hiddenTicks; private Block approaching; private CollectItems collect; private final List<Block> all;
         public Harvest(List<Block> blocks, String label, String what) {
             this.blocks = new ArrayList<>(blocks); this.all = new ArrayList<>(blocks); this.label = label; this.what = what; this.kindHint = blocks.isEmpty() ? Material.AIR : blocks.getFirst().getType();
         }
@@ -220,17 +220,36 @@ public final class Tasks {
             }
             if (breaker != null) {
                 if (breaker.target.getType().isAir()) { breaker = null; return Status.RUNNING; }
-                if (breaker.tick(h, m)) { broken++; blocks.remove(breaker.target); onBroken(h, breaker.target); breaker = null; pause = 6 + m.rnd().nextInt(8); }
+                if (breaker.tick(h, m)) {
+                    if (all.contains(breaker.target)) { broken++; blocks.remove(breaker.target); onBroken(h, breaker.target); }
+                    breaker = null; pause = 6 + m.rnd().nextInt(8);
+                }
                 return Status.RUNNING;
             }
             blocks.removeIf(b -> !wanted(b));
             if (blocks.isEmpty()) return finish(h, m);
             // pick a reachable block (lowest first so trees fall top-down naturally)
             Block feetBelow = h.loc().getBlock().getRelative(BlockFace.DOWN);
-            Block reachable = blocks.stream().filter(b -> Act.inReach(h, b) && !b.equals(feetBelow))
-                .min(Comparator.comparingInt(Block::getY)).orElse(null);
+            List<Block> inReach = blocks.stream().filter(b -> Act.inReach(h, b) && !b.equals(feetBelow))
+                .sorted(Comparator.comparingInt(Block::getY)).toList();
+            // only break what you can actually see - no digging through walls
+            Block reachable = null;
+            for (Block b : inReach) if (Act.canSee(h, b)) { reachable = b; break; }
+            if (reachable == null && !inReach.isEmpty()) {
+                Block hid = inReach.getFirst();
+                Block ob = Act.obstruction(h, hid);
+                // natural leaves in the way get punched through, like a player would; same-kind blocks are just the next one
+                if (ob != null && Act.inReach(h, ob) && Act.canSee(h, ob) && !HumansPlugin.get().zones().isProtected(ob, h)
+                    && (ob.getBlockData() instanceof org.bukkit.block.data.type.Leaves lv && !lv.isPersistent() || wanted(ob) && all.contains(ob))) reachable = ob;
+                else {
+                    if (++hiddenTicks > 60) { h.markBad(hid, m.now()); blocks.remove(hid); hiddenTicks = 0; return Status.RUNNING; }
+                    if (!h.nav.active()) h.nav.moveTo(hid.getLocation().add(0.5, 0, 0.5), 1.2, false);
+                    h.nav.tick();
+                    return Status.RUNNING;
+                }
+            }
             if (reachable != null) {
-                h.nav.stop();
+                h.nav.stop(); hiddenTicks = 0;
                 breaker = new Breaker(); breaker.target = reachable;
                 return Status.RUNNING;
             }
@@ -310,7 +329,9 @@ public final class Tasks {
             } else {
                 h.nav.stop();
                 Act.lookAt(h, target.getEyeLocation());
-                if (cooldown <= 0) { Act.attack(h, target); cooldown = 12; }
+                if (!h.entity.hasLineOfSight(target)) { // no hitting through walls: walk around to it
+                    h.nav.moveTo(target.getLocation(), 1.0, true); h.nav.tick();
+                } else if (cooldown <= 0) { Act.attack(h, target); cooldown = 12; }
                 else if (!hunting && age % 8 == 0) { // strafe a little
                     Vector side = target.getLocation().toVector().subtract(h.loc().toVector()).setY(0).normalize().rotateAroundY(Math.PI / 2).multiply(m.rnd().nextBoolean() ? 0.25 : -0.25);
                     h.entity.setVelocity(h.entity.getVelocity().add(side));
