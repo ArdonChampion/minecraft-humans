@@ -100,6 +100,13 @@ public final class HumansCommand implements TabExecutor {
                 Human h = find(s, a); if (h == null) return true;
                 m.interrupt(h, "felt like reconsidering"); msg(s, h.name + " will rethink.");
             }
+            case "knowledge" -> { // /humans knowledge <name>: what that human knows about the world
+                Human h = a.length > 1 ? m.byName(a[1]) : null;
+                if (h == null || !h.valid()) { msg(s, "Usage: /humans knowledge <human>  (" + plugin.knowledge().size() + " places known)"); break; }
+                String k = plugin.knowledge().describeFor(h, 25);
+                msg(s, h.name + " knows (" + plugin.knowledge().size() + " places total):");
+                for (String line : k.split("\n- ")) if (!line.isBlank()) msg(s, "- " + line);
+            }
             case "text" -> msg(s, plugin.text().status());
             case "budget" -> {
                 for (String line : plugin.budget().summary().split("\n")) msg(s, line);
@@ -209,7 +216,7 @@ public final class HumansCommand implements TabExecutor {
     @Override
     public List<String> onTabComplete(CommandSender s, Command c, String l, String[] a) {
         if (a.length == 1) return filter(List.of("spawn", "list", "info", "tp", "bring", "kill", "remove", "home", "goal", "plan", "cancel", "give", "think",
-            "protect", "unprotect", "zones", "budget", "text", "debug", "pack", "admin", "awake", "probe"), a[0]);
+            "protect", "unprotect", "zones", "budget", "knowledge", "text", "debug", "pack", "admin", "awake", "probe"), a[0]);
         if (a.length == 2 && a[0].equalsIgnoreCase("admin")) return filter(List.of("list", "add", "remove"), a[1]);
         if (a.length == 3 && a[0].equalsIgnoreCase("admin")) { List<String> n = new ArrayList<>(); for (Player p : org.bukkit.Bukkit.getOnlinePlayers()) n.add(p.getName()); return filter(n, a[2]); }
         if (a.length == 2 && !a[0].equalsIgnoreCase("spawn") && !a[0].equalsIgnoreCase("protect")) {

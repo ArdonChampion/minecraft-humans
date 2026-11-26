@@ -110,6 +110,7 @@ public final class Awareness {
     public static void update(Human h, HumanManager m, HumansPlugin plugin) {
         if (h.sleeping) return;
         long now = m.now();
+        if (m.rnd().nextInt(5) == 0) plugin.knowledge().notice(h); // look around and remember notable things
         Location here = h.loc();
         boolean under = isUnderground(here);
         if (under && !h.underground && !(h.task instanceof dev.timur.humans.tasks.Work.StripMine)) h.event("I'm underground in a cave");

@@ -77,7 +77,13 @@ public final class Skills {
                 }
                 if (a.has("place")) {
                     String p = s(a, "place", "home");
-                    Location to = p.equals("village") ? h.village : p.equals("bed") ? h.bed : h.home;
+                    Location to = p.equals("village") ? h.village : p.equals("bed") ? h.bed : p.equals("home") ? h.home : null;
+                    if (to == null && !Set.of("village", "bed", "home").contains(p)) { // a marked place
+                        var mk = HumansPlugin.get().knowledge().markNamed(p);
+                        if (mk == null || !mk.world.equals(l.getWorld().getName())) return Start.err("nobody marked a place called '" + p + "'");
+                        to = mk.loc(l.getWorld());
+                        if (to.distance(l) > 70) return Start.task(new Work.Travel(Math.atan2(to.getZ() - l.getZ(), to.getX() - l.getX()), (int) Navigator.horizDist(l, to), "to " + p));
+                    }
                     if (to == null) return Start.err("you don't have a " + p + " yet");
                     return Start.task(new Tasks.Goto(to, 2, false, "going to my " + p));
                 }
@@ -85,7 +91,7 @@ public final class Skills {
                     int x = i(a, "x", l.getBlockX()), z = i(a, "z", l.getBlockZ());
                     int y = a.has("y") ? i(a, "y", l.getBlockY()) : l.getWorld().getHighestBlockYAt(x, z) + 1;
                     Location to = new Location(l.getWorld(), x + 0.5, y, z + 0.5);
-                    if (to.distance(l) > 70) return Start.err("that spot is too far (" + (int) to.distance(l) + " blocks); go in smaller hops of under 60 blocks");
+                    if (to.distance(l) > 70) return Start.task(new Work.Travel(Math.atan2(z - l.getZ(), x - l.getX()), (int) Navigator.horizDist(l, to), "to " + x + "," + z));
                     return Start.task(new Tasks.Goto(to, 1.5, false, "walking to " + x + "," + z));
                 }
                 return Start.err("go_to needs player, human, place or x/z");
@@ -180,24 +186,43 @@ public final class Skills {
                 return Start.task(new Tasks.Give(p, mt, n));
             }
             case "look_in_chest", "search_chests", "inspect_chest" -> {
-                Block c = Planner.nearestChest(h);
+                Block c = chestAt(h, a);
+                if (c == null && a.has("x")) return Start.err("there's no chest at " + s(a, "x", "?") + "," + s(a, "y", "?") + "," + s(a, "z", "?") + " (gone?)");
+                if (c == null) c = Planner.nearestChest(h);
                 if (c == null) return Start.err("no chest within 20 blocks");
+                if (c.getLocation().distance(l) > 96) return Start.err("that chest is too far - go_to it first");
                 return Start.task(new Life.InspectChest(c));
             }
-            case "take_from_chest" -> {
-                Block c = Planner.nearestChest(h);
-                if (c == null) return Start.err("no chest within 20 blocks");
-                boolean allowed = h.chestPermission.values().stream().anyMatch(t -> m.now() - t < 20 * 60 * 30)
-                    || g.from != null && g.text.toLowerCase(Locale.ROOT).matches(".*\\b(take|grab|get|use)\\b.*\\bchests?\\b.*");
-                if (!allowed) return Start.err("no permission to take from chests - ask the owner first");
+            case "take_from_chest", "take" -> {
                 Material mt = mat(s(a, "item", ""));
-                if (mt == null) return Start.err("unknown item");
-                return Start.task(new Life.TakeFromChest(c, mt, g.from == null ? "a player" : g.from));
+                if (mt == null) return Start.err("unknown item '" + s(a, "item", "") + "'");
+                Block c = chestAt(h, a);
+                if (c == null && a.has("x")) return Start.err("there's no chest at " + s(a, "x", "?") + "," + s(a, "y", "?") + "," + s(a, "z", "?") + " (gone?)");
+                if (c == null) for (var kp : HumansPlugin.get().knowledge().chestsWith(h, Items.nice(mt))) {
+                    Block b = l.getWorld().getBlockAt(kp.x, kp.y, kp.z);
+                    if (b.getState() instanceof org.bukkit.block.Container && b.getLocation().distance(l) < 96) { c = b; break; }
+                }
+                if (c == null) return Start.err("no known chest has " + Items.nice(mt) + " - look_in_chest to find out, ask someone, or gather it");
+                if (c.getLocation().distance(l) > 96) return Start.err("that chest is too far - go_to it first");
+                String owner = HumansPlugin.get().knowledge().ownerOf(c.getLocation());
+                boolean free = !owner.startsWith("a player");
+                boolean allowed = free || h.chestPermission.values().stream().anyMatch(t -> m.now() - t < 20 * 60 * 30)
+                    || g.from != null && g.text.toLowerCase(Locale.ROOT).matches(".*\\b(take|grab|get|use|borrow)\\b.*\\b(chests?|stuff|my)\\b.*");
+                if (!allowed) return Start.err("that chest is in a player's base - ask the owner first (ask)");
+                return Start.task(new Life.TakeFromChest(c, mt, i(a, "count", 8), free ? "the village" : g.from == null ? "a player" : g.from));
             }
-            case "put_in_chest" -> {
-                Block c = Planner.nearestChest(h);
+            case "put_in_chest", "store" -> {
+                Block c = chestAt(h, a);
+                if (c == null) { // prefer a shared village chest we know about, so everyone can use what's stored
+                    for (var kp : HumansPlugin.get().knowledge().chests(h)) {
+                        if (kp.owner == null || !kp.owner.startsWith("humans'")) continue;
+                        Block b = l.getWorld().getBlockAt(kp.x, kp.y, kp.z);
+                        if (b.getState() instanceof org.bukkit.block.Container && b.getLocation().distance(l) < 64) { c = b; break; }
+                    }
+                    if (c == null) c = Planner.nearestChest(h);
+                }
                 Material mt = mat(s(a, "item", ""));
-                if (c == null) return Start.err("no chest within 20 blocks");
+                if (c == null) return Start.err("no chest within 20 blocks - craft and place one first (craft chest, then build custom with a C:chest legend)");
                 if (mt == null || h.inv.count(mt) == 0) return Start.err("you have no " + s(a, "item", "?"));
                 return Start.task(new PutInChest(c, mt, Math.max(1, i(a, "count", h.inv.count(mt)))));
             }
@@ -234,11 +259,73 @@ public final class Skills {
                 // inside a player's base only when a player asked for it
                 return Start.task(new Work.BreakBlocks(bl, g.fromId != null));
             }
+            case "ask_for", "request", "borrow" -> {
+                String from = s(a, "from", s(a, "player", s(a, "human", ""))).replace("player:", "").replace("human:", "").trim();
+                Material mt = mat(s(a, "item", ""));
+                if (mt == null) return Start.err("unknown item '" + s(a, "item", "") + "'");
+                int n = Math.max(1, Math.min(i(a, "count", 1), 64));
+                String why = s(a, "why", "");
+                Human o = m.byName(from);
+                if (o != null && o != h) {
+                    if (!o.valid() || o.loc().getWorld() != l.getWorld() || o.loc().distance(l) > 96) return Start.err(o.name + " is too far away");
+                    int has = o.inv.count(mt);
+                    if (has <= 0) return Start.err(o.name + " has no " + Items.nice(mt));
+                    if (o.commitUntil > m.now() && o.commitWho != null) return Start.err(o.name + " is busy doing something for " + o.commitWho + " right now");
+                    int k = Math.min(n, has);
+                    HumansPlugin.get().chat().broadcast(h, o.name + ", could you give me " + k + " " + Items.nice(mt) + "?" + (why.isEmpty() ? "" : " " + why));
+                    o.event(h.name + " asked me for " + k + " " + Items.nice(mt) + (why.isEmpty() ? "" : " (" + why + ")"));
+                    m.startTask(o, new dev.timur.humans.brain.Option("give_" + h.name.toLowerCase(Locale.ROOT), "give " + h.name + " " + k + " " + Items.nice(mt), () -> new Work.GiveHuman(h, mt, k), 1));
+                    return Start.task(new Work.WaitForItem(mt, k, 50, o.entity));
+                }
+                Player p = player(from);
+                if (p == null || p.getWorld() != l.getWorld()) return Start.err("nobody called '" + from + "' is around");
+                HumansPlugin.get().chat().broadcast(h, p.getName() + ", could you give me " + n + " " + Items.nice(mt) + "?" + (why.isEmpty() ? "" : " " + why));
+                h.event("I asked " + p.getName() + " for " + n + " " + Items.nice(mt));
+                return Start.task(new Work.WaitForItem(mt, n, 60, p));
+            }
+            case "mark_place", "remember_place", "mark" -> {
+                String name = s(a, "name", "").trim();
+                if (name.isEmpty()) return Start.err("mark_place needs a name");
+                Location at = l;
+                if (a.has("x") && a.has("z")) {
+                    int x = i(a, "x", l.getBlockX()), z = i(a, "z", l.getBlockZ());
+                    at = new Location(l.getWorld(), x, a.has("y") ? i(a, "y", l.getBlockY()) : l.getWorld().getHighestBlockYAt(x, z) + 1, z);
+                }
+                HumansPlugin.get().knowledge().mark(h, at, name, s(a, "note", ""));
+                return Start.ok("marked \"" + name + "\" at " + at.getBlockX() + "," + at.getBlockY() + "," + at.getBlockZ() + " - everyone knows it now");
+            }
+            case "note", "remember" -> {
+                String text = s(a, "text", "").trim();
+                if (text.isEmpty()) return Start.err("note needs text");
+                h.remember(text.length() > 140 ? text.substring(0, 137) + "..." : text);
+                return Start.ok("will remember that");
+            }
+            case "accompany", "adventure", "go_with" -> {
+                Player p = player(s(a, "player", s(a, "with", "")));
+                if (p == null) return Start.err("player " + s(a, "player", "?") + " is not online");
+                return Start.task(new Work.Accompany(p, i(a, "minutes", 10)));
+            }
+            case "travel", "journey" -> {
+                if (a.has("x") && a.has("z")) {
+                    int x = i(a, "x", l.getBlockX()), z = i(a, "z", l.getBlockZ());
+                    return Start.task(new Work.Travel(Math.atan2(z - l.getZ(), x - l.getX()), (int) Math.hypot(x - l.getX(), z - l.getZ()), "to " + x + "," + z));
+                }
+                String dir = s(a, "direction", "");
+                double yaw = Work.Travel.yawFor(dir);
+                if (Double.isNaN(yaw)) return Start.err("travel needs direction (north/south/east/west/northeast...) or x and z");
+                return Start.task(new Work.Travel(yaw, i(a, "distance", 100), dir));
+            }
             case "wait", "rest" -> { return Start.task(new Tasks.Idle(Math.max(1, Math.min(i(a, "seconds", 5), 60)) * 20, "waiting")); }
             case "dance" -> { return Start.task(new Life.Dance()); }
             case "pet_animal", "pet" -> {
-                for (Entity e : h.entity.getNearbyEntities(16, 6, 16)) if (e instanceof Animals an) return Start.task(new Life.PetAnimal(an));
-                return Start.err("no animals nearby");
+                String kind = s(a, "animal", s(a, "target", "")).toLowerCase(Locale.ROOT).replaceAll("s$", "").trim();
+                Animals best = null; double bd = 1e9;
+                for (Entity e : h.entity.getNearbyEntities(Planner.SEE, Planner.SEE_Y, Planner.SEE))
+                    if (e instanceof Animals an && !an.isDead() && (kind.isEmpty() || an.getType().name().toLowerCase(Locale.ROOT).contains(kind))) {
+                        double d = e.getLocation().distanceSquared(l); if (d < bd) { bd = d; best = an; }
+                    }
+                if (best != null) return Start.task(new Life.PetAnimal(best));
+                return Start.err(kind.isEmpty() ? "no animals within " + Planner.SEE + " blocks" : "no " + kind + " within " + Planner.SEE + " blocks");
             }
             case "have_baby" -> {
                 Human o = m.byName(s(a, "with", ""));
@@ -248,6 +335,18 @@ public final class Skills {
             }
             default -> { return Start.err("unknown skill '" + step.skill() + "'"); }
         }
+    }
+
+    /** The chest/barrel at x,y,z (y may be off by a couple of blocks), or null. */
+    static Block chestAt(Human h, JsonObject a) {
+        if (!a.has("x") || !a.has("z")) return null;
+        World w = h.loc().getWorld();
+        int x = i(a, "x", 0), z = i(a, "z", 0), y = i(a, "y", h.loc().getBlockY());
+        for (int dy : new int[]{0, 1, -1, 2, -2}) {
+            Block b = w.getBlockAt(x, y + dy, z);
+            if (b.getState() instanceof org.bukkit.block.Container) return b;
+        }
+        return null;
     }
 
     static String needs(Items.Recipe r) {

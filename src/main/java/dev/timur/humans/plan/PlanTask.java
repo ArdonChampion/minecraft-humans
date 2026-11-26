@@ -33,7 +33,7 @@ public final class PlanTask extends Task {
     @Override public String debugInfo() { return "goal=" + g.title + " round=" + g.rounds + " step=" + g.stepIdx + "/" + g.steps.size() + (cur != null ? " cur=" + cur.label() : ""); }
 
     protected Status run(Human h, HumanManager m) {
-        if (g.done) { outcome = "finished: " + g.title; HumanLog.log("goal_end", h, "goal", g.title, "result", "done", "rounds", g.rounds, "from", g.from); return Status.SUCCESS; }
+        if (g.done) { outcome = "finished: " + g.title; HumanLog.log("goal_end", h, "goal", g.title, "result", "done", "rounds", g.rounds, "from", g.from); doneGoal(h, g.title + (g.from != null ? " (for " + g.from + ")" : "")); return Status.SUCCESS; }
         if (waiting) {
             if (++waitTicks > 20 * 90) { waiting = false; g.note("(planning took too long)"); if (++g.rounds > 12) return giveUp(h); }
             if (age % 20 == 0) { Player p = m.nearestPlayer(h, 8); if (p != null) Act.lookAt(h, p.getEyeLocation()); }
@@ -71,9 +71,16 @@ public final class PlanTask extends Task {
     private Status giveUp(Human h) {
         HumanLog.log("goal_end", h, "goal", g.title, "result", "gave_up", "rounds", g.rounds, "log", String.join(" || ", g.log));
         g.done = true;
+        doneGoal(h, g.title + " (gave up)");
         outcome = "gave up on: " + g.title + " (too many attempts)";
         h.remember("I gave up on \"" + g.title + "\"");
         return Status.FAIL;
+    }
+
+    private static void doneGoal(Human h, String what) {
+        h.goalsDone.remove(what);
+        h.goalsDone.addFirst(what);
+        while (h.goalsDone.size() > 12) h.goalsDone.removeLast();
     }
 
     private void requestPlan(Human h, HumanManager m) {

@@ -15,6 +15,7 @@ public final class HumansPlugin extends JavaPlugin {
     private GeminiClient gemini;
     private TextClient text;
     private Zones zones;
+    private Knowledge knowledge;
     private AdminAccess admins;
     private HumanLog humanLog;
     private Budget budget;
@@ -28,6 +29,7 @@ public final class HumansPlugin extends JavaPlugin {
     public GeminiClient gemini() { return gemini; }
     public TextClient text() { return text; }
     public Zones zones() { return zones; }
+    public Knowledge knowledge() { return knowledge; }
     public AdminAccess admins() { return admins; }
     public Budget budget() { return budget; }
     public Brain brain() { return brain; }
@@ -47,6 +49,7 @@ public final class HumansPlugin extends JavaPlugin {
         gemini = new GeminiClient(this);
         text = new TextClient(this);
         zones = new Zones(this);
+        knowledge = new Knowledge(this);
         pack = new PackServer(this);
         pack.buildAndStart();
         manager = new HumanManager(this);
@@ -65,7 +68,7 @@ public final class HumansPlugin extends JavaPlugin {
         manager.loadAll();
         Bukkit.getScheduler().runTaskTimer(this, manager::tick, 1, 1);
         Bukkit.getScheduler().runTaskTimer(this, brain::pump, 40, 5);
-        Bukkit.getScheduler().runTaskTimer(this, () -> { manager.saveAll(); budget.save(); zones.save(); }, 20 * 120, 20 * 120);
+        Bukkit.getScheduler().runTaskTimer(this, () -> { manager.saveAll(); budget.save(); zones.save(); knowledge.save(); }, 20 * 120, 20 * 120);
         getLogger().info("Humans enabled. AI: " + (gemini.ready() ? "Gemini" : "offline"));
     }
 
@@ -77,6 +80,7 @@ public final class HumansPlugin extends JavaPlugin {
         }
         if (budget != null) budget.save();
         if (zones != null) zones.save();
+        if (knowledge != null) knowledge.save();
         if (pack != null) pack.stop();
         HumanLog.log("server_stop", null);
         if (humanLog != null) humanLog.close();

@@ -12,6 +12,8 @@ import java.util.concurrent.CompletableFuture;
 
 /** Turns a goal + the current situation into a short list of skill calls, using the text AI. */
 public final class Planner {
+    /** How far humans notice creatures. Skills that act on creatures search this far too, so the plan never names something a skill can't find. */
+    public static final int SEE = 40, SEE_Y = 16;
     private Planner() {}
 
     public record Result(String thought, String say, String title, List<Goal.Step> steps, boolean done) {}
@@ -21,7 +23,9 @@ public final class Planner {
         mine {block:"stone|dirt|sand|gravel|clay|coal_ore|iron_ore|copper_ore|gold_ore|redstone_ore|lapis_ore|diamond_ore", count:int} - mine visible blocks of that type nearby (iron needs stone pickaxe, diamond/gold/redstone need iron pickaxe)
         strip_mine {y:int, length:int} - staircase down to height y, then a long tunnel, mining every ore it uncovers. Iron is common around y=16..48, diamonds around y=-58..-50. Takes a few minutes; bring food and torches.
         explore {for:"trees|stone|animals|water|a flat spot|anything"} - walk further away to find something
-        go_to {x:int,y:int,z:int} | go_to {player:"NAME"} | go_to {human:"NAME"} | go_to {place:"home|village|bed"}
+        go_to {x:int,y:int,z:int} | go_to {player:"NAME"} | go_to {human:"NAME"} | go_to {place:"home|village|bed|NAME OF A MARKED PLACE"} (far targets become a journey)
+        travel {direction:"north|south|east|west|northeast|...", distance:int} | travel {x:int, z:int} - a long trip over land (up to 600 blocks); you only move while players are around
+        accompany {player:"NAME", minutes:int} - go adventuring WITH a player: stay with them, fight monsters that come at you, keep up (up to 30 min)
         follow {player:"NAME", seconds:int}
         go_outside {} - leave a cave / get from underground to the surface
         collect_items {} - pick up dropped items nearby
@@ -40,15 +44,18 @@ public final class Planner {
         hunt {animal:"cow|pig|chicken|sheep|rabbit", count:int}
         fight {target:"nearest_monster|zombie|skeleton|spider|creeper"} - never players
         give {to:"player:NAME" or "human:NAME", item:"material_name", count:int}
-        look_in_chest {} - open the nearest chest and see what's inside
-        take_from_chest {item:"material_name", count:int} - ONLY when the owner allowed it
-        put_in_chest {item:"material_name", count:int}
-        ask {player:"NAME", text:"question"} - ask a player (their reply shows up in your recent events next round)
+        look_in_chest {x,y,z} - open that chest (or the nearest one without x,y,z) and remember what's inside
+        take_from_chest {item:"material_name", count:int, x,y,z} - take from that chest; without x,y,z it uses the nearest KNOWN chest that has the item. Village and wild chests are free; chests in a player's base need the owner's permission
+        put_in_chest {item:"material_name", count:int, x,y,z} - store things (without x,y,z: a village chest if you know one) so everyone can use them
+        ask_for {from:"HUMAN_OR_PLAYER_NAME", item:"material_name", count:int, why:"short reason"} - ask another human (they hand it over if they have it) or a player for items, then wait for it
+        ask {player:"NAME", text:"question"} - ask a player something (their reply shows up in your conversation next round)
+        mark_place {name:"short name", note:"why it matters", x,y,z optional} - remember a place for everyone (a good build spot, a cave with iron, a nice view...)
+        note {text:"..."} - remember something important long-term
         say {text:"..."}
         stand_at {x:int,y:int,z:int, face:"PLAYER_NAME", seconds:int} - go to an exact spot and stay there (e.g. lining up)
         break_block {x:int,y:int,z:int, x2:int,y2:int,z2:int} - walk over and break one block (or a box of up to 32, x2/y2/z2 optional) like a player: you must be able to see it (break what's in front first), any block works but without the right tool it's ~3x slower and stone-type blocks drop nothing without a pickaxe. Storage/beds can't be broken.
         wait {seconds:int}
-        dance {} | pet_animal {}
+        dance {} | pet_animal {animal:"chicken|cow|..." optional} - walk to the nearest such animal and pet it
         have_baby {with:"HUMAN_NAME"} - start a family with another adult human; you both need to be fed and have 6+ food items between you
         """;
 
@@ -67,7 +74,11 @@ public final class Planner {
             + "Rules:\n- Give 1-6 steps for the NEXT part of the work. You will be called again with the results, so adapt as you go.\n"
             + "- When the goal is achieved (or truly impossible) reply with \"done\":true and no steps, and say something about it.\n"
             + "- Only use the skills below with sensible arguments. Coordinates are block coordinates.\n"
-            + "- Get what you're missing first (no pickaxe -> chop_trees, craft wooden_pickaxe; need iron -> stone pickaxe first, then mine/strip_mine iron_ore and smelt).\n"
+            + "- USE WHAT ALREADY EXISTS before gathering from scratch: your inventory, the other humans' inventories (ask_for), chests in WHAT YOU KNOW (take_from_chest), "
+            + "and players (ask_for / ask). Only gather or craft from zero what nobody has.\n"
+            + "- Get what you're still missing (no pickaxe -> chop_trees, craft wooden_pickaxe; need iron -> stone pickaxe first, then mine/strip_mine iron_ore and smelt).\n"
+            + "- Share: store spare materials and food in a village chest (put_in_chest) and mark interesting places (mark_place) so everyone benefits.\n"
+            + "- Be creative and fun like a good player: give builds your own design (build custom), invite players along, go on adventures (accompany / travel), surprise people.\n"
             + "- Respect players: never break or build inside players' bases (protected areas), never take from chests without permission, never attack players.\n"
             + "- If a step failed, read why and try a different approach instead of repeating the same thing.\n"
             + "- Keep the players' requests' spirit: be helpful and entertaining. You can only do what the skills allow; if asked for something impossible, do the closest fun thing and say so.\n"
@@ -100,7 +111,7 @@ public final class Planner {
         if (h.project != null) s.append("PERSONAL PROJECT: ").append(OptionGenerator.projectDesc(h.project)).append(".\n");
         List<String> people = new ArrayList<>(), mobs = new ArrayList<>();
         Map<String, Integer> animals = new TreeMap<>();
-        for (Entity e : h.entity.getNearbyEntities(40, 16, 40)) {
+        for (Entity e : h.entity.getNearbyEntities(SEE, SEE_Y, SEE)) {
             Location el = e.getLocation(); int d = (int) el.distance(l);
             if (e instanceof Player p) people.add("player " + p.getName() + " at " + xyz(el) + " (" + d + "m, you " + Human.trustWord(h.trustOf(p.getUniqueId())) + " them)");
             else if (m.byEntity(e) != null) { Human o = m.byEntity(e); people.add("human " + o.name + (o.isChild() ? " (child)" : "") + " at " + xyz(el) + " (" + d + "m, doing: " + (o.task == null ? "nothing" : o.task.label()) + ")"); }
@@ -118,8 +129,18 @@ public final class Planner {
         if (!sc.crops.isEmpty()) res.add(sc.crops.size() + " ripe crops");
         if (!sc.flowers.isEmpty()) res.add("flowers/grass");
         s.append("RESOURCES SEEN: ").append(res.isEmpty() ? "nothing special" : String.join(", ", res)).append(".\n");
-        Block chest = nearestChest(h);
-        if (chest != null) s.append("NEAREST CHEST: at ").append(xyz(chest.getLocation())).append(h.chestPermission.isEmpty() ? " (no permission to take anything)" : " (permission from: " + names(h) + ")").append(".\n");
+        String known = HumansPlugin.get().knowledge().describeFor(h, 22);
+        if (!known.isEmpty()) s.append("WHAT YOU KNOW (shared by all humans):\n- ").append(known).append("\n");
+        if (!h.chestPermission.isEmpty()) s.append("CHEST PERMISSION from: ").append(names(h)).append(".\n");
+        List<String> friends = new ArrayList<>();
+        for (Human o : m.all()) {
+            if (o == h || !o.valid() || o.loc().getWorld() != w || o.loc().distance(l) > 150) continue;
+            friends.add(o.name + (o.isChild() ? " (child)" : "") + " (" + (int) o.loc().distance(l) + "m): " + o.inv.describe()
+                + (o.goal != null && !o.goal.done ? " - working on: " + o.goal.title : ""));
+            if (friends.size() >= 6) break;
+        }
+        if (!friends.isEmpty()) s.append("OTHER HUMANS CARRY:\n- ").append(String.join("\n- ", friends)).append("\n");
+        if (!h.goalsDone.isEmpty()) s.append("YOUR PAST GOALS (newest first): ").append(String.join(" | ", h.goalsDone)).append(".\n");
         s.append("PLAYERS' BASES (protected, don't break/build there): ").append(HumansPlugin.get().zones().describeNear(l, h)).append(".\n");
         if (!h.memories.isEmpty()) s.append("MEMORIES: ").append(String.join(" | ", h.memories.stream().limit(8).toList())).append(".\n");
         if (!h.recent.isEmpty()) s.append("RECENT EVENTS (newest first): ").append(String.join(" | ", h.recent)).append(".\n");

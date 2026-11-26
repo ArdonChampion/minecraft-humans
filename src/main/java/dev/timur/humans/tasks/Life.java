@@ -199,7 +199,7 @@ public final class Life {
                 cur = null;
                 if (fed >= 2) return done(h);
                 double bd = 1e9;
-                for (Entity e : h.entity.getNearbyEntities(16, 6, 16))
+                for (Entity e : h.entity.getNearbyEntities(dev.timur.humans.plan.Planner.SEE, dev.timur.humans.plan.Planner.SEE_Y, dev.timur.humans.plan.Planner.SEE))
                     if (e instanceof Animals a && a.getType() == type && a.isAdult() && a.canBreed() && !a.isLoveMode() && breedFood(h, a) != null) {
                         double d = e.getLocation().distanceSquared(h.loc()); if (d < bd) { bd = d; cur = a; }
                     }
@@ -249,12 +249,13 @@ public final class Life {
 
     /** Walk to a chest/barrel, open it, have a look, close it. Never takes anything without asking. */
     public static class InspectChest extends Task {
-        protected final Block chest; protected int open; private boolean opened;
+        protected final Block chest; protected int open; private boolean opened; private Human who;
         public InspectChest(Block chest) { this.chest = chest; }
         public String label() { return "looking inside a chest"; }
         public int maxTicks() { return 20 * 35; }
         protected Status run(Human h, HumanManager m) {
-            if (!(chest.getState() instanceof Container)) { outcome = "the chest was gone"; return Status.FAIL; }
+            who = h;
+            if (!(chest.getState() instanceof Container)) { HumansPlugin.get().knowledge().forget(chest); outcome = "the chest was gone"; return Status.FAIL; }
             if (Act.eye(h).distance(chest.getLocation().add(0.5, 0.5, 0.5)) > 3.4) {
                 if (!h.nav.active()) if (!h.nav.moveTo(chest.getLocation().add(0.5, 0, 0.5), 2.2, false)) { h.markBad(chest, m.now()); outcome = "couldn't reach the chest"; return Status.FAIL; }
                 if (h.nav.tick() == Navigator.Result.FAILED) { h.markBad(chest, m.now()); outcome = "couldn't reach the chest"; return Status.FAIL; }
@@ -292,6 +293,7 @@ public final class Life {
             return Status.SUCCESS;
         }
         protected void close() {
+            if (who != null) HumansPlugin.get().knowledge().noteChest(who, chest);
             if (chest.getState() instanceof Lidded l) l.close();
             chest.getWorld().playSound(chest.getLocation(), chest.getState() instanceof org.bukkit.block.Barrel ? "block.barrel.close" : "block.chest.close", 0.6f, 1f);
         }
@@ -300,15 +302,16 @@ public final class Life {
 
     /** The player said yes: take a few of the item. */
     public static final class TakeFromChest extends InspectChest {
-        private final Material mat; private final String who;
-        public TakeFromChest(Block chest, Material mat, String who) { super(chest); this.mat = mat; this.who = who; }
+        private final Material mat; private final String who; private final int n;
+        public TakeFromChest(Block chest, Material mat, String who) { this(chest, mat, 4, who); }
+        public TakeFromChest(Block chest, Material mat, int n, String who) { super(chest); this.mat = mat; this.who = who; this.n = Math.max(1, Math.min(n, 64)); }
         @Override public String label() { return "taking some " + Items.nice(mat) + " from " + who + "'s chest"; }
         @Override protected Status finishLook(Human h, HumanManager m) {
             int took = 0;
             if (chest.getState() instanceof Container c) {
                 int have = 0;
                 for (ItemStack it : c.getInventory().getContents()) if (it != null && it.getType() == mat) have += it.getAmount();
-                took = Math.min(4, have);
+                took = Math.min(n, have);
                 if (took > 0) { c.getInventory().removeItem(new ItemStack(mat, took)); h.inv.add(mat, took); }
             }
             close();

@@ -636,6 +636,7 @@ public final class HumanManager {
                 if (nm != null) for (String k : nm.getKeys(false)) h.knownNames.put(UUID.fromString(k), nm.getString(k));
                 for (String s : y.getStringList("memories")) h.memories.addLast(s);
                 for (String s : y.getStringList("recent")) h.recent.addLast(s);
+                for (String s : y.getStringList("goals_done")) h.goalsDone.addLast(s);
                 humans.put(id, h);
             } catch (Exception e) {
                 plugin.getLogger().warning("Could not load " + f.getName() + ": " + e);
@@ -663,7 +664,7 @@ public final class HumanManager {
         y.createSection("inventory", h.inv.serialize());
         Map<String, Object> tr = new LinkedHashMap<>(); h.trust.forEach((k, v) -> tr.put(k.toString(), v)); y.createSection("trust", tr);
         Map<String, Object> nm = new LinkedHashMap<>(); h.knownNames.forEach((k, v) -> nm.put(k.toString(), v)); y.createSection("names", nm);
-        y.set("memories", new ArrayList<>(h.memories)); y.set("recent", new ArrayList<>(h.recent));
+        y.set("memories", new ArrayList<>(h.memories)); y.set("recent", new ArrayList<>(h.recent)); y.set("goals_done", new ArrayList<>(h.goalsDone));
         try { y.save(new File(dir, h.id + ".yml")); } catch (Exception e) { plugin.getLogger().warning("Could not save " + h.name + ": " + e); }
     }
 }

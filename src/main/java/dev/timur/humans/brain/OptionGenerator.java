@@ -317,8 +317,7 @@ public final class OptionGenerator {
             out.add(new Option("make_plan", "Think up a bigger plan of your own (" + pr + ") and work through it step by step",
                 () -> {
                     h.lastSelfPlanTick = m.now();
-                    h.goal = new dev.timur.humans.plan.Goal("Pick a concrete, achievable goal for the next few minutes that fits your project (" + pr
-                        + ") and your situation, then do it. Ideas: a better house, a farm, an animal pen, tools or armour, a village with the others, mining iron, a decoration.", null, null, "", m.now());
+                    h.goal = new dev.timur.humans.plan.Goal(selfGoalText(h, m, pr), null, null, "", m.now());
                     return new dev.timur.humans.plan.PlanTask(h.goal);
                 }, 0.32 + p.diligence() * 0.15 + (h.project != null ? 0.08 : 0)));
         }
@@ -378,6 +377,22 @@ public final class OptionGenerator {
         }
         out.sort(Comparator.comparingDouble(Option::score).reversed());
         return out.size() > 40 ? out.subList(0, 40) : out;
+    }
+
+    /** The brief for a goal the human invents itself: specific, varied, creative, never a repeat. */
+    static String selfGoalText(Human h, HumanManager m, String project) {
+        List<String> players = new ArrayList<>();
+        for (org.bukkit.entity.Player p : h.loc().getWorld().getPlayers()) if (p.getLocation().distance(h.loc()) < 48) players.add(p.getName());
+        return "Decide your OWN next goal, then do it. Think like a creative, fun survival player with your personality (" + h.personality.describe() + ")"
+            + (h.project != null ? " who cares about: " + project : "") + ". Pick ONE specific thing for the next 5-15 minutes. Some kinds of ideas: "
+            + "an ADVENTURE (travel in a direction nobody explored yet, find a cave, village, temple or a great view, mark_place what you find, come back with loot and a story); "
+            + "an ORIGINAL BUILD in your own custom design (a lookout tower, a bridge, a well, a statue, a garden, a little shop, a monument for a friend); "
+            + "something for the VILLAGE (a shared storage chest with useful stuff, a farm, an animal pen, tools or food for everyone); "
+            + "something SOCIAL (a gift or surprise for a player, invite a player on an adventure, team up with another human on a project); "
+            + "a COLLECTION (every flower colour, a stack of iron, your first diamonds). "
+            + (players.isEmpty() ? "" : "Players are nearby (" + String.join(", ", players) + ") - including them is extra fun. ")
+            + "Use what you and the village already have (WHAT YOU KNOW, OTHER HUMANS CARRY) instead of starting from zero. "
+            + "Do something NEW - not one of YOUR PAST GOALS and not what the other humans are already working on. Give it a short, catchy goal_title.";
     }
 
     /** Closest chest/barrel within 16 blocks that we haven't looked into lately. */

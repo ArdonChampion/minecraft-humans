@@ -141,7 +141,7 @@ public final class Work {
                 return Status.RUNNING;
             }
             LivingEntity t = null; double bd = 1e9;
-            for (Entity e : h.entity.getNearbyEntities(24, 8, 24))
+            for (Entity e : h.entity.getNearbyEntities(dev.timur.humans.plan.Planner.SEE, dev.timur.humans.plan.Planner.SEE_Y, dev.timur.humans.plan.Planner.SEE))
                 if (e.getType() == type && e instanceof LivingEntity le && !le.isDead() && e.getLocation().distanceSquared(h.loc()) < bd && !prot(h, e.getLocation().getBlock())) { bd = e.getLocation().distanceSquared(h.loc()); t = le; }
             if (t == null) { outcome = kills > 0 ? "hunted " + kills + ", no more around" : "no " + type.name().toLowerCase(Locale.ROOT) + "s around (outside players' bases)"; return kills > 0 ? Status.SUCCESS : Status.FAIL; }
             cur = new Tasks.Attack(t, true);
@@ -276,6 +276,136 @@ public final class Work {
             h.nav.stop();
             outcome = "broke " + broken + " blocks" + (skipped > 0 ? ", skipped " + skipped : "") + (notes.isEmpty() ? "" : " (" + String.join("; ", new LinkedHashSet<>(notes)) + ")");
             return broken > 0 || skipped == 0 ? Status.SUCCESS : Status.FAIL;
+        }
+    }
+
+    // ================================================================ adventures
+
+    /**
+     * Go along with a player like a real companion: keep up, fight what threatens them or us, pick up loot on the way.
+     * Like tamed pets, catches up by teleporting when the player got far away and walking can't keep up.
+     */
+    public static final class Accompany extends Task {
+        private final Player p; private final int ticks; private Tasks.Attack fight; private int farTicks, fights, lostTicks;
+        public Accompany(Player p, int minutes) { this.p = p; this.ticks = 20 * 60 * Math.max(1, Math.min(minutes, 30)); }
+        public String label() { return fight != null ? "fighting alongside " + p.getName() : "adventuring with " + p.getName(); }
+        public int maxTicks() { return ticks + 40; }
+        @Override public boolean isWork() { return false; }
+        protected Status run(Human h, HumanManager m) {
+            if (!p.isOnline()) { outcome = p.getName() + " left the game" + (fights > 0 ? " (we fought " + fights + " monsters together)" : ""); return Status.FAIL; }
+            if (age >= ticks) { outcome = "went adventuring with " + p.getName() + " for " + ticks / 1200 + " min" + (fights > 0 ? ", fought " + fights + " monsters" : ""); return Status.SUCCESS; }
+            if (fight != null) {
+                Status s = fight.tick(h, m);
+                if (s == Status.RUNNING && fight.age() < 20 * 25) return s;
+                fight.stop(h); if (s == Status.SUCCESS) fights++; fight = null;
+            }
+            boolean sameWorld = p.getWorld() == h.loc().getWorld();
+            double d = sameWorld ? p.getLocation().distance(h.loc()) : 1e9;
+            // threats near the player or near us
+            if (age % 10 == 0 && sameWorld && h.entity.getHealth() > 7) {
+                Monster best = null; double bd = 1e9;
+                for (Entity e : p.getNearbyEntities(10, 5, 10)) {
+                    if (!(e instanceof Monster mo) || mo.isDead() || e.getLocation().distance(h.loc()) > 16) continue;
+                    double md = e.getLocation().distanceSquared(p.getLocation());
+                    if (md < bd && h.entity.hasLineOfSight(mo)) { bd = md; best = mo; }
+                }
+                if (best != null) { fight = new Tasks.Attack(best, false); h.event("fought a " + HumanManager.nameOf(best) + " next to " + p.getName()); return Status.RUNNING; }
+            }
+            // keep up
+            if (d > 40 || !sameWorld) {
+                if (++farTicks > 20 * 8 && HumansPlugin.get().getConfig().getBoolean("companion.teleport_to_catch_up", true)) {
+                    Location spot = Act.nearestLand(p.getLocation().clone().add(p.getLocation().getDirection().setY(0).multiply(-2.5)), 4);
+                    if (spot != null) { h.nav.stop(); h.entity.teleport(spot); farTicks = 0; h.event("caught up with " + p.getName()); }
+                    else if (++lostTicks > 20 * 60) { outcome = "lost " + p.getName() + " on the way"; return Status.FAIL; }
+                }
+            } else farTicks = 0;
+            if (d > 4.5 && sameWorld) {
+                if (!h.nav.active() || age % 20 == 0) h.nav.moveTo(p.getLocation(), 3, d > 9);
+                h.nav.tick();
+            } else {
+                h.nav.stop();
+                if (age % 4 == 0) Act.lookAt(h, p.getEyeLocation());
+            }
+            return Status.RUNNING;
+        }
+        @Override public void stop(Human h) { super.stop(h); if (fight != null) fight.stop(h); }
+    }
+
+    /** Travel a long way in a direction (or towards x,z), leg by leg over the surface. */
+    public static final class Travel extends Task {
+        private final double yaw0; private final int dist; private final String where; private Location start; private Tasks.Goto go; private int fails, legs;
+        private double yaw;
+        public Travel(double yaw, int dist, String where) { this.yaw0 = yaw; this.yaw = yaw; this.dist = Math.max(16, Math.min(dist, 600)); this.where = where; }
+        public String label() { return "travelling " + where; }
+        public int maxTicks() { return 20 * 60 * 10; }
+        @Override public boolean isWork() { return true; }
+        @Override public String debugInfo() { return "legs=" + legs + " fails=" + fails; }
+        protected Status run(Human h, HumanManager m) {
+            Location here = h.loc();
+            if (start == null) start = here.clone();
+            double gone = Math.hypot(here.getX() - start.getX(), here.getZ() - start.getZ());
+            if (gone >= dist - 4) { outcome = "travelled " + (int) gone + " blocks " + where + ", now at " + here.getBlockX() + "," + here.getBlockY() + "," + here.getBlockZ(); return Status.SUCCESS; }
+            if (go == null) {
+                Location spot = null;
+                for (int i = 0; i < 8 && spot == null; i++) {
+                    double y = yaw0 + (i == 0 ? 0 : (i % 2 == 0 ? 1 : -1) * ((i + 1) / 2) * 0.35); // fan out around the heading
+                    spot = Act.surfaceSpot(here.clone().add(Math.cos(y) * 16, 0, Math.sin(y) * 16));
+                    if (spot != null && Act.wet(spot.getBlock())) spot = null;
+                    if (spot != null) yaw = y;
+                }
+                if (spot == null) {
+                    if (++fails > 6) return stuck(h, gone);
+                    // take a step sideways and try again
+                    Location side = Act.surfaceSpot(here.clone().add(Math.cos(yaw0 + Math.PI / 2) * 6 * (fails % 2 == 0 ? 1 : -1), 0, Math.sin(yaw0 + Math.PI / 2) * 6 * (fails % 2 == 0 ? 1 : -1)));
+                    if (side == null) return stuck(h, gone);
+                    go = new Tasks.Goto(side, 1.5, false, label());
+                    return Status.RUNNING;
+                }
+                go = new Tasks.Goto(spot, 2, false, label());
+            }
+            Status s = go.tick(h, m);
+            if (s != Status.RUNNING) {
+                go = null;
+                if (s == Status.FAIL) { if (++fails > 6) return stuck(h, gone); }
+                else legs++;
+            }
+            return Status.RUNNING;
+        }
+        private Status stuck(Human h, double gone) {
+            Location l = h.loc();
+            outcome = "travelled " + (int) gone + " blocks " + where + " then the way was blocked (at " + l.getBlockX() + "," + l.getBlockY() + "," + l.getBlockZ() + ")";
+            return gone > 16 ? Status.SUCCESS : Status.FAIL;
+        }
+        public static double yawFor(String dir) {
+            return switch (dir.toLowerCase(Locale.ROOT).trim()) {
+                case "east", "e" -> 0; case "south", "s" -> Math.PI / 2; case "west", "w" -> Math.PI; case "north", "n" -> -Math.PI / 2;
+                case "southeast", "se" -> Math.PI / 4; case "southwest", "sw" -> 3 * Math.PI / 4; case "northwest", "nw" -> -3 * Math.PI / 4; case "northeast", "ne" -> -Math.PI / 4;
+                default -> Double.NaN;
+            };
+        }
+    }
+
+    /** Wait near someone for an item we asked for (it arrives via a gift or a drop we pick up). */
+    public static final class WaitForItem extends Task {
+        private final Material mat; private final int want, seconds; private final Entity near; private int start = -1;
+        public WaitForItem(Material mat, int want, int seconds, Entity near) { this.mat = mat; this.want = want; this.seconds = seconds; this.near = near; }
+        public String label() { return "waiting for " + Items.nice(mat); }
+        public int maxTicks() { return seconds * 20 + 40; }
+        protected Status run(Human h, HumanManager m) {
+            if (start < 0) start = h.inv.count(mat);
+            int got = h.inv.count(mat) - start;
+            if (got >= want || got > 0 && age > 20 * 8) { outcome = "got " + got + " " + Items.nice(mat); return Status.SUCCESS; }
+            if (age >= seconds * 20) { outcome = got > 0 ? "got " + got + " " + Items.nice(mat) : "nobody gave me " + Items.nice(mat); return got > 0 ? Status.SUCCESS : Status.FAIL; }
+            // walk over to items lying around (the pickup reflex grabs them), otherwise stay close and look at them
+            if (age % 20 == 0) for (Entity e : h.entity.getNearbyEntities(6, 3, 6))
+                if (e instanceof Item it && it.getItemStack().getType() == mat) { h.nav.moveTo(it.getLocation(), 0.6, false); break; }
+            if (h.nav.active()) { h.nav.tick(); return Status.RUNNING; }
+            if (near != null && near.isValid() && near.getWorld() == h.loc().getWorld()) {
+                double d = near.getLocation().distance(h.loc());
+                if (d > 4 && d < 40) { h.nav.moveTo(near.getLocation(), 3, false); h.nav.tick(); }
+                else if (age % 4 == 0) Act.lookAt(h, near.getLocation().add(0, 1.6, 0));
+            }
+            return Status.RUNNING;
         }
     }
 

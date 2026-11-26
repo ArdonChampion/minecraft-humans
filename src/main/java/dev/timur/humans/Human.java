@@ -63,6 +63,7 @@ public final class Human {
 
     // stamina, goals, promises
     public double energy = 20;             // 0 exhausted .. 20 fresh
+    public final Deque<String> goalsDone = new ArrayDeque<>(); // newest first
     public String project;                 // personal project id (see OptionGenerator.PROJECTS)
     public long projectSince;
     public long commitUntil;               // doing something a player asked: don't get distracted until this tick

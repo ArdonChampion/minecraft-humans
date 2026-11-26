@@ -261,7 +261,11 @@ public final class ChatBrain implements Listener {
             HumanLog.log("goal_new", h, "from", p.getName(), "text", g.text, "group", g.group, "quick", g.quick);
             h.goal = g;
             m.startTask(h, new Option("do_request", "do what " + p.getName() + " asked: " + g.title, () -> new dev.timur.humans.plan.PlanTask(g), 1));
-            h.commitUntil = m.now() + 20L * 60 * (g.quick ? 5 : 15);
+            int mins = g.quick ? 5 : 15;
+            for (var st : g.steps) // adventures last as long as asked
+                if (Set.of("accompany", "adventure", "go_with", "travel", "journey").contains(st.skill()))
+                    try { mins = Math.max(mins, (st.args().has("minutes") ? st.args().get("minutes").getAsInt() : 10) + 2); } catch (Exception ignored) {}
+            h.commitUntil = m.now() + 20L * 60 * mins;
             h.commitWho = p.getName();
             h.remember("agreed to " + p.getName() + "'s request: " + trim(lastText, 60));
         }

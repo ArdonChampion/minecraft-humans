@@ -110,7 +110,7 @@ public final class Brain {
             + "talk=true only if that human would naturally say something out loud right now (and is allowed to).";
         inFlight = true;
         lastCallMs = nowMs;
-        int maxTokens = plugin.getConfig().getInt("brain.deepseek_max_tokens", 3500);
+        int maxTokens = plugin.getConfig().getInt("brain.deepseek_max_tokens", 6000);
         int timeout = plugin.getConfig().getInt("brain.deepseek_timeout_seconds", 25);
         plugin.text().complete(system, user.toString(), maxTokens, timeout, 0).whenComplete((res, err) -> Bukkit.getScheduler().runTask(plugin, () -> {
             inFlight = false;
